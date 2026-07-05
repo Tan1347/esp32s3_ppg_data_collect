@@ -252,7 +252,10 @@ esp_err_t wifi_prov_init(void)
 
 esp_err_t wifi_prov_add(const char *ssid, const char *password, uint8_t priority)
 {
-    if (!ssid || !s_creds_mutex) return ESP_ERR_INVALID_STATE;
+    if (!ssid || !s_creds_mutex) {
+        ESP_LOGE(TAG, "wifi_prov_add FAILED: ssid=%p mutex=%p", (void*)ssid, (void*)s_creds_mutex);
+        return ESP_ERR_INVALID_STATE;
+    }
 
     xSemaphoreTake(s_creds_mutex, portMAX_DELAY);
 
