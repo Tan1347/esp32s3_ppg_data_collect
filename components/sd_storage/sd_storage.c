@@ -577,32 +577,38 @@ esp_err_t sd_storage_flush(void)
     if (!s_mounted) return ESP_OK;
 
     /* Flush raw buffers (protected by s_buf_mutex) */
-    xSemaphoreTake(s_buf_mutex, portMAX_DELAY);
-    if (s_primary_buf.pos > 0 && s_raw_fd >= 0) {
-        flush_buffer(&s_primary_buf, s_raw_fd);
+    if (s_buf_mutex) {
+        xSemaphoreTake(s_buf_mutex, portMAX_DELAY);
+        if (s_primary_buf.pos > 0 && s_raw_fd >= 0) {
+            flush_buffer(&s_primary_buf, s_raw_fd);
+        }
+        if (s_backup_buf.pos > 0 && s_raw_fd >= 0) {
+            flush_buffer(&s_backup_buf, s_raw_fd);
+        }
+        xSemaphoreGive(s_buf_mutex);
     }
-    if (s_backup_buf.pos > 0 && s_raw_fd >= 0) {
-        flush_buffer(&s_backup_buf, s_raw_fd);
-    }
-    xSemaphoreGive(s_buf_mutex);
 
     /* Flush CSV buffer */
-    xSemaphoreTake(s_csv_mutex, portMAX_DELAY);
-    if (s_csv_buf_pos > 0 && s_csv_fd >= 0) {
-        safe_write(s_csv_fd, s_csv_buf, s_csv_buf_pos);
-        fsync(s_csv_fd);
-        s_csv_buf_pos = 0;
+    if (s_csv_mutex) {
+        xSemaphoreTake(s_csv_mutex, portMAX_DELAY);
+        if (s_csv_buf_pos > 0 && s_csv_fd >= 0) {
+            safe_write(s_csv_fd, s_csv_buf, s_csv_buf_pos);
+            fsync(s_csv_fd);
+            s_csv_buf_pos = 0;
+        }
+        xSemaphoreGive(s_csv_mutex);
     }
-    xSemaphoreGive(s_csv_mutex);
 
     /* Flush DHT11 buffer */
-    xSemaphoreTake(s_dht11_mutex, portMAX_DELAY);
-    if (s_dht11_buf_pos > 0 && s_dht11_fd >= 0) {
-        safe_write(s_dht11_fd, s_dht11_buf, s_dht11_buf_pos);
-        fsync(s_dht11_fd);
-        s_dht11_buf_pos = 0;
+    if (s_dht11_mutex) {
+        xSemaphoreTake(s_dht11_mutex, portMAX_DELAY);
+        if (s_dht11_buf_pos > 0 && s_dht11_fd >= 0) {
+            safe_write(s_dht11_fd, s_dht11_buf, s_dht11_buf_pos);
+            fsync(s_dht11_fd);
+            s_dht11_buf_pos = 0;
+        }
+        xSemaphoreGive(s_dht11_mutex);
     }
-    xSemaphoreGive(s_dht11_mutex);
 
     return ESP_OK;
 }
