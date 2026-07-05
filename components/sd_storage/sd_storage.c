@@ -577,21 +577,21 @@ esp_err_t sd_storage_flush(void)
     if (!s_mounted) return ESP_OK;
 
     /* Flush raw buffers (protected by s_buf_mutex) */
-    if (s_buf_mutex) {
+    if (s_buf_mutex && s_primary_buf.data && s_raw_fd >= 0) {
         xSemaphoreTake(s_buf_mutex, portMAX_DELAY);
-        if (s_primary_buf.pos > 0 && s_raw_fd >= 0) {
+        if (s_primary_buf.pos > 0) {
             flush_buffer(&s_primary_buf, s_raw_fd);
         }
-        if (s_backup_buf.pos > 0 && s_raw_fd >= 0) {
+        if (s_backup_buf.pos > 0 && s_backup_buf.data) {
             flush_buffer(&s_backup_buf, s_raw_fd);
         }
         xSemaphoreGive(s_buf_mutex);
     }
 
     /* Flush CSV buffer */
-    if (s_csv_mutex) {
+    if (s_csv_mutex && s_csv_buf && s_csv_fd >= 0) {
         xSemaphoreTake(s_csv_mutex, portMAX_DELAY);
-        if (s_csv_buf_pos > 0 && s_csv_fd >= 0) {
+        if (s_csv_buf_pos > 0) {
             safe_write(s_csv_fd, s_csv_buf, s_csv_buf_pos);
             fsync(s_csv_fd);
             s_csv_buf_pos = 0;
@@ -600,9 +600,9 @@ esp_err_t sd_storage_flush(void)
     }
 
     /* Flush DHT11 buffer */
-    if (s_dht11_mutex) {
+    if (s_dht11_mutex && s_dht11_buf && s_dht11_fd >= 0) {
         xSemaphoreTake(s_dht11_mutex, portMAX_DELAY);
-        if (s_dht11_buf_pos > 0 && s_dht11_fd >= 0) {
+        if (s_dht11_buf_pos > 0) {
             safe_write(s_dht11_fd, s_dht11_buf, s_dht11_buf_pos);
             fsync(s_dht11_fd);
             s_dht11_buf_pos = 0;
@@ -663,8 +663,11 @@ uint32_t sd_storage_get_total_space_mb(void)
 
 void sd_storage_release_buffers(void)
 {
-    /* Flush if mounted, but always free buffers */
-    if (s_mounted) {
+    /* Set mounted=false FIRST to prevent other tasks from entering write functions */
+    s_mounted = false;
+
+    /* Flush remaining data if buffers are still valid */
+    if (s_primary_buf.data || s_csv_buf || s_dht11_buf) {
         sd_storage_flush();
     }
 
