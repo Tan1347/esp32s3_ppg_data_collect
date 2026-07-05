@@ -1,0 +1,371 @@
+name: Build & Release Firmware
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  IDF_TARGET: esp32s3
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v6.0.1
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fix git ownership
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # ========== Version (read only, user controlled) ==========
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(cat version.txt | tr -d '[:space:]')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "📌 Version: $VERSION"
+
+      # ========== Get commit info ==========
+      - name: Get commit info
+        id: commit
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "📌 Commit: $SHORT_SHA"
+
+      # ========== Cache ccache ==========
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: esp32s3-ccache-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            esp32s3-ccache-${{ github.ref_name }}-
+            esp32s3-ccache-
+
+      # ========== Configure ccache ==========
+      - name: Configure ccache
+        run: |
+          mkdir -p ~/.ccache
+          cat > ~/.ccache/ccache.conf << EOF
+          max_size = 2G
+          compiler_check = content
+          hash_dir = false
+          compression = true
+          compression_level = 6
+          EOF
+          echo "✅ ccache configured"
+
+      # ========== Build firmware using build.sh ==========
+      - name: Build firmware
+        run: |
+          # Enable ccache
+          export CCACHE_DIR=~/.ccache
+          export IDF_CCACHE_ENABLE=1
+          
+          # Use build.sh with clean to ensure fresh sdkconfig
+          chmod +x build.sh
+          bash build.sh clean
+          
+          # Show ccache stats
+          ccache -s
+
+      # ========== Get firmware info ==========
+      - name: Get firmware info
+        id: firmware
+        if: success()
+        run: |
+          BIN_SIZE=$(stat -c%s build/app.bin)
+          BIN_KB=$((BIN_SIZE / 1024))
+          echo "size_bytes=$BIN_SIZE" >> $GITHUB_OUTPUT
+          echo "size_kb=$BIN_KB" >> $GITHUB_OUTPUT
+          echo "📌 Firmware: ${BIN_KB}KB"
+
+      # ========== Package firmware ==========
+      - name: Package firmware
+        if: success()
+        run: |
+          apt-get update -qq && apt-get install -y -qq p7zip-full > /dev/null 2>&1
+          
+          VERSION="${{ steps.version.outputs.version }}"
+          mkdir -p /tmp/release
+          cp build/app.bin /tmp/release/
+          cp build/bootloader/bootloader.bin /tmp/release/bootloader.bin
+          cp build/partition_table/partition-table.bin /tmp/release/
+          cp build/ota_data_initial.bin /tmp/release/
+          cp partitions.csv /tmp/release/
+          
+          # Create README
+          cat > /tmp/release/README.txt << READMEEOF
+          ESP32-S3 PPG Monitor Firmware v${VERSION}
+          
+          Flash Command:
+          esptool --chip esp32s3 --flash_mode dio --flash_size 16MB --flash_freq 80m \\
+            write_flash 0x0 bootloader.bin 0x8000 partition-table.bin \\
+            0x11000 ota_data_initial.bin 0x20000 app.bin
+          
+          Files:
+          - bootloader.bin        -> 0x0
+          - partition-table.bin   -> 0x8000
+          - ota_data_initial.bin  -> 0x11000
+          - app.bin               -> 0x20000
+          READMEEOF
+          
+          cd /tmp/release
+          7z a -t7z -m0=LZMA2 -mx=5 "/tmp/ppg-tf-esp32s3-v${VERSION}.7z" * > /dev/null
+          echo "📦 Package created: ppg-tf-esp32s3-v${VERSION}.7z"
+
+      # ========== Generate release notes ==========
+      - name: Generate release notes
+        id: release-notes
+        if: success()
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          CURRENT_SHORT="${{ steps.commit.outputs.short_sha }}"
+          
+          # Find previous release tag
+          PREV_TAG=$(git tag -l "v*" --sort=-version:refname | head -1)
+          
+          if [ -n "$PREV_TAG" ]; then
+            COMMITS=$(git log --pretty=format:"- %s (%h)" "$PREV_TAG..HEAD" -10)
+          else
+            COMMITS=$(git log --pretty=format:"- %s (%h)" HEAD -10)
+          fi
+          
+          # Build release body (limit to 300 chars)
+          RELEASE_BODY="Firmware: v${VERSION} (${CURRENT_SHORT})"$'\n\n'"Changes:"$'\n'"${COMMITS}"
+          
+          RELEASE_LEN=$(echo "$RELEASE_BODY" | wc -c)
+          if [ "$RELEASE_LEN" -gt 300 ]; then
+            RELEASE_BODY=$(echo "$RELEASE_BODY" | head -c 297)
+            RELEASE_BODY="${RELEASE_BODY}..."
+          fi
+          
+          echo "$RELEASE_BODY" > /tmp/release_body.txt
+          echo "📋 Release notes:"
+          cat /tmp/release_body.txt
+
+      # ========== Create release ==========
+      - name: Create GitHub Release
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: "Firmware v${{ steps.version.outputs.version }}"
+          body_path: /tmp/release_body.txt
+          files: /tmp/ppg-tf-esp32s3-v${{ steps.version.outputs.version }}.7z
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ========== Summary ==========
+      - name: Build summary
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "✅ Build succeeded"
+            echo "📦 Version: v${{ steps.version.outputs.version }}"
+            echo "📦 Firmware: ${{ steps.firmware.outputs.size_kb }}KB"
+          else
+            echo "❌ Build failed"
+          fi
+
+  cleanup:
+    needs: build
+    if: success()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Cleanup old releases, tags, and workflow runs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          echo "🗑️ Cleaning up old releases (keeping last 3)..."
+          
+          # Delete old releases via API
+          RELEASES=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            | jq -r 'sort_by(.created_at) | reverse | .[].tag_name')
+          
+          COUNT=0
+          for TAG in $RELEASES; do
+            COUNT=$((COUNT + 1))
+            if [ $COUNT -gt 3 ]; then
+              echo "  Deleting release: $TAG"
+              REL_ID=$(curl -s -H "Authorization: token $GH_TOKEN" \
+                "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$TAG" | jq -r '.id')
+              if [ -n "$REL_ID" ] && [ "$REL_ID" != "null" ]; then
+                curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
+                  "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/$REL_ID"
+                curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
+                  "https://api.github.com/repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG"
+              fi
+            fi
+          done
+          
+          echo "🗑️ Cleaning up old workflow runs (keeping last 3)..."
+          
+          RUNS=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs?per_page=100&status=completed" \
+            | jq -r '.workflow_runs | sort_by(.created_at) | reverse | .[].id')
+          
+          COUNT=0
+          CURRENT_RUN_ID="${{ github.run_id }}"
+          for RUN_ID in $RUNS; do
+            COUNT=$((COUNT + 1))
+            if [ "$RUN_ID" = "$CURRENT_RUN_ID" ]; then
+              echo "  Skipping current run: $RUN_ID"
+              continue
+            fi
+            if [ $COUNT -gt 3 ]; then
+              echo "  Deleting run: $RUN_ID"
+              curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
+                "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID"
+            fi
+          done
+          
+          echo "✅ Cleanup complete"
+          
+          # Build release body (limit to 300 chars)
+          RELEASE_BODY="Firmware: v${VERSION} (${CURRENT_SHORT})"$'\n\n'"Changes:"$'\n'"${COMMITS}"
+          
+          RELEASE_LEN=$(echo "$RELEASE_BODY" | wc -c)
+          if [ "$RELEASE_LEN" -gt 300 ]; then
+            RELEASE_BODY=$(echo "$RELEASE_BODY" | head -c 297)
+            RELEASE_BODY="${RELEASE_BODY}..."
+          fi
+          
+          echo "$RELEASE_BODY" > /tmp/release_body.txt
+          echo "📋 Release notes:"
+          cat /tmp/release_body.txt
+
+      # ========== Delete old release ==========
+      - name: Delete old release if tag exists
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="v${VERSION}"
+          RELEASE_ID=$(gh release view "$TAG" --json id -q '.id' 2>/dev/null || true)
+          if [ -n "$RELEASE_ID" ]; then
+            echo "🗑️ Deleting old release $TAG"
+            gh release delete "$TAG" --yes --cleanup-tag
+          fi
+
+      # ========== Create release ==========
+      - name: Create GitHub Release
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: "Firmware v${{ steps.version.outputs.version }}"
+          body_path: /tmp/release_body.txt
+          files: /tmp/ppg-tf-esp32s3-v${{ steps.version.outputs.version }}.7z
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ========== Cleanup old releases, tags, and workflow runs ==========
+      - name: Cleanup old releases and tags
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🗑️ Cleaning up old releases (keeping last 3)..."
+          
+          # Get releases using GitHub API
+          RELEASES=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/releases?per_page=100" \
+            | jq -r 'sort_by(.created_at) | reverse | .[].tag_name')
+          
+          COUNT=0
+          for TAG in $RELEASES; do
+            COUNT=$((COUNT + 1))
+            if [ $COUNT -gt 3 ]; then
+              echo "  Deleting release: $TAG"
+              RELEASE_ID=$(curl -s -H "Authorization: token $GH_TOKEN" \
+                "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG" \
+                | jq -r '.id')
+              if [ -n "$RELEASE_ID" ] && [ "$RELEASE_ID" != "null" ]; then
+                curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
+                  "https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID" || true
+                curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
+                  "https://api.github.com/repos/${{ github.repository }}/git/refs/tags/$TAG" || true
+              fi
+            fi
+          done
+          
+          echo "🗑️ Cleaning up old tags..."
+          TAGS=$(git tag -l "v*" --sort=-creatordate | head -20)
+          COUNT=0
+          for TAG in $TAGS; do
+            COUNT=$((COUNT + 1))
+            if [ $COUNT -gt 3 ]; then
+              echo "  Deleting tag: $TAG"
+              git push origin --delete "$TAG" 2>/dev/null || true
+              git tag -d "$TAG" 2>/dev/null || true
+            fi
+          done
+          
+          echo "✅ Cleanup complete"
+
+      - name: Cleanup old workflow runs
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🗑️ Cleaning up old workflow runs (keeping last 3)..."
+          
+          RUNS=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs?per_page=100&status=completed" \
+            | jq -r '.workflow_runs | sort_by(.created_at) | reverse | .[].id')
+          
+          COUNT=0
+          CURRENT_RUN_ID="${{ github.run_id }}"
+          for RUN_ID in $RUNS; do
+            COUNT=$((COUNT + 1))
+            if [ "$RUN_ID" = "$CURRENT_RUN_ID" ]; then
+              echo "  Skipping current run: $RUN_ID"
+              continue
+            fi
+            if [ $COUNT -gt 3 ]; then
+              echo "  Deleting run: $RUN_ID"
+              curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
+                "https://api.github.com/repos/${{ github.repository }}/actions/runs/$RUN_ID" || true
+            fi
+          done
+          
+          echo "✅ Workflow runs cleanup complete"
+
+      # ========== Summary ==========
+      - name: Build summary
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "✅ Build succeeded"
+            echo "📦 Version: v${{ steps.version.outputs.version }}"
+            echo "📦 Firmware: ${{ steps.firmware.outputs.size_kb }}KB"
+          else
+            echo "❌ Build failed"
+          fi

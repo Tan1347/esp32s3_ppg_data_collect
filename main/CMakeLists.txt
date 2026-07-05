@@ -1,0 +1,30 @@
+idf_component_register(
+    SRCS
+        "main.c"
+    INCLUDE_DIRS
+        "."
+    PRIV_REQUIRES
+        nvs_flash
+        app_update
+        esp_event
+        esp_netif
+        esp_wifi
+        esp_http_client
+        esp_driver_gpio
+        esp_driver_spi
+        esp_pm
+        bt
+        ppg_config
+        max30102
+        battery
+        ppg_algo
+        sd_storage
+        ble_svc
+        wifi_prov
+        wifi_transfer
+        ota_upgrade
+        ppg_log
+        power_mgmt
+        dht11
+        uart_recorder
+)
