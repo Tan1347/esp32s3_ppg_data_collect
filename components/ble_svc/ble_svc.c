@@ -419,7 +419,7 @@ static void cmd_query_status(uint8_t cmd, const uint8_t *data, uint8_t len)
     printf("\n");
 
     /* Send status notification so APP can receive it immediately */
-    if (s_connected && s_status_subscribed) {
+    if (s_connected) {
         struct os_mbuf *om = ble_hs_mbuf_from_flat(s_status_data, sizeof(s_status_data));
         if (om) {
             ble_gattc_notify_custom(s_conn_handle, s_char_status_handle, om);
@@ -428,8 +428,7 @@ static void cmd_query_status(uint8_t cmd, const uint8_t *data, uint8_t len)
             printf("[BLE] Status notification FAILED (om alloc failed)\n");
         }
     } else {
-        printf("[BLE] Status notification SKIPPED (connected=%d subscribed=%d)\n",
-               s_connected, s_status_subscribed);
+        printf("[BLE] Status notification SKIPPED (not connected)\n");
     }
 
     /* Do NOT send response on Command characteristic - data already sent via notification */
