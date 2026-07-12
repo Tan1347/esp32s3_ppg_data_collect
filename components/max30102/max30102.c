@@ -14,6 +14,7 @@
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/event_groups.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -27,6 +28,12 @@ static const char *TAG = "max30102";
 /* I2C 超时 */
 #define I2C_TIMEOUT_MS              100
 
+/* Event group bits */
+#define EVT_DATA_READY              BIT0
+
+/* FIFO almost-full threshold: interrupt when FIFO has (32-threshold) samples */
+#define MAX30102_FIFO_THRESHOLD     7   /* 25 samples per batch (250ms at 100Hz) */
+
 /* 驱动状态 */
 static bool s_initialized = false;
 static bool s_measuring = false;
@@ -35,14 +42,20 @@ static bool s_measuring = false;
 static i2c_master_bus_handle_t s_bus_handle = NULL;
 static i2c_master_dev_handle_t s_dev_handle = NULL;
 
-/* GPIO interrupt count (PPG_RDY interrupt, +1 per sample) */
-static volatile uint32_t s_int_count = 0;
-static portMUX_TYPE s_int_spinlock = portMUX_INITIALIZER_UNLOCKED;
+/* Event group for interrupt-driven reading */
+static EventGroupHandle_t s_event_group = NULL;
 
-/* GPIO 中断回调 */
+/* GPIO 中断回调 — set event bit for task notification */
 static void IRAM_ATTR max30102_isr_handler(void *arg)
 {
-    s_int_count++;
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    if (s_event_group) {
+        xEventGroupSetBitsFromISR(s_event_group, EVT_DATA_READY,
+                                   &xHigherPriorityTaskWoken);
+    }
+    if (xHigherPriorityTaskWoken) {
+        portYIELD_FROM_ISR();
+    }
 }
 
 /* ========== 底层 I2C 读写 ========== */
@@ -126,8 +139,13 @@ esp_err_t max30102_init(void)
     };
     ESP_RETURN_ON_ERROR(max30102_configure(&default_cfg), TAG, "Configure failed");
 
+    /* Create event group for interrupt-driven reading */
+    if (!s_event_group) {
+        s_event_group = xEventGroupCreate();
+    }
+
     s_initialized = true;
-    ESP_LOGI(TAG, "MAX30102 init done");
+    puts("[MAX30102] Init done");
     return ESP_OK;
 }
 
@@ -144,8 +162,8 @@ esp_err_t max30102_configure(const max30102_config_t *config)
     max30102_read_reg(MAX30102_REG_INTR_STATUS_1, &dummy);
     max30102_read_reg(MAX30102_REG_INTR_STATUS_2, &dummy);
 
-    /* FIFO config: sample_avg, rollover=0, almost_full=15 */
-    uint8_t fifo_cfg = ((config->sample_avg & 0x07) << 5) | 0x0F;
+    /* FIFO config: sample_avg, rollover=0, almost_full=threshold */
+    uint8_t fifo_cfg = ((config->sample_avg & 0x07) << 5) | (MAX30102_FIFO_THRESHOLD & 0x0F);
     ESP_RETURN_ON_ERROR(max30102_write_reg(MAX30102_REG_FIFO_CONFIG, fifo_cfg),
                         TAG, "Set FIFO config failed");
 
@@ -269,6 +287,48 @@ uint8_t max30102_get_fifo_count(void)
     return (wr_ptr - rd_ptr) & 0x1F;
 }
 
+esp_err_t max30102_wait_data(uint32_t timeout_ms)
+{
+    if (!s_event_group) return ESP_ERR_INVALID_STATE;
+    EventBits_t bits = xEventGroupWaitBits(s_event_group, EVT_DATA_READY,
+                                            pdTRUE, pdFALSE,
+                                            pdMS_TO_TICKS(timeout_ms));
+    return (bits & EVT_DATA_READY) ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+uint8_t max30102_read_fifo_batch(max30102_raw_t *buf, uint8_t max_count)
+{
+    uint8_t count = max30102_get_fifo_count();
+    if (count == 0) return 0;
+    if (count > max_count) count = max_count;
+
+    /* Clear interrupt status */
+    uint8_t dummy;
+    max30102_read_reg(MAX30102_REG_INTR_STATUS_1, &dummy);
+    max30102_read_reg(MAX30102_REG_INTR_STATUS_2, &dummy);
+
+    /* Batch read: 6 bytes per sample (RED[3] + IR[3]) */
+    uint8_t raw_buf[6 * 32];  /* Max 32 samples */
+    size_t bytes = count * 6;
+    esp_err_t ret = max30102_read_regs(MAX30102_REG_FIFO_DATA, raw_buf, bytes);
+    if (ret != ESP_OK) return 0;
+
+    /* Parse 18-bit samples */
+    for (int i = 0; i < count; i++) {
+        int off = i * 6;
+        buf[i].red = ((uint32_t)raw_buf[off] << 16) |
+                     ((uint32_t)raw_buf[off + 1] << 8) |
+                     ((uint32_t)raw_buf[off + 2]);
+        buf[i].ir = ((uint32_t)raw_buf[off + 3] << 16) |
+                    ((uint32_t)raw_buf[off + 4] << 8) |
+                    ((uint32_t)raw_buf[off + 5]);
+        buf[i].red &= 0x03FFFF;
+        buf[i].ir &= 0x03FFFF;
+    }
+
+    return count;
+}
+
 esp_err_t max30102_set_led_current(uint8_t red, uint8_t ir)
 {
     esp_err_t ret = max30102_write_reg(MAX30102_REG_LED1_PA, red);
@@ -321,18 +381,15 @@ esp_err_t max30102_read_interrupt_status(uint8_t *status1, uint8_t *status2)
 
 uint32_t max30102_get_int_count(void)
 {
-    return s_int_count;
+    if (!s_event_group) return 0;
+    return (xEventGroupGetBits(s_event_group) & EVT_DATA_READY) ? 1 : 0;
 }
 
 uint32_t max30102_reset_int_count(void)
 {
-    /* Atomic read-and-reset: disable interrupts to prevent ISR from firing
-     * between the read and the clear, which would lose an interrupt count. */
-    portENTER_CRITICAL(&s_int_spinlock);
-    uint32_t count = s_int_count;
-    s_int_count = 0;
-    portEXIT_CRITICAL(&s_int_spinlock);
-    return count;
+    if (!s_event_group) return 0;
+    EventBits_t bits = xEventGroupClearBits(s_event_group, EVT_DATA_READY);
+    return (bits & EVT_DATA_READY) ? 1 : 0;
 }
 
 i2c_master_bus_handle_t max30102_get_i2c_bus(void)

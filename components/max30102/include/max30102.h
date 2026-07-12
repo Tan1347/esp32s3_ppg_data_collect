@@ -117,6 +117,21 @@ uint8_t max30102_read_fifo(max30102_raw_t *buf, uint8_t max_count);
 uint8_t max30102_get_fifo_count(void);
 
 /**
+ * @brief 等待 FIFO 数据就绪 (中断驱动)
+ * @param timeout_ms 超时时间 (ms)
+ * @return ESP_OK 数据就绪, ESP_ERR_TIMEOUT 超时
+ */
+esp_err_t max30102_wait_data(uint32_t timeout_ms);
+
+/**
+ * @brief 批量读取 FIFO 数据 (单次 I2C 传输, 高效)
+ * @param buf 输出缓冲区
+ * @param max_count 缓冲区最大容量
+ * @return 实际读取的采样数
+ */
+uint8_t max30102_read_fifo_batch(max30102_raw_t *buf, uint8_t max_count);
+
+/**
  * @brief 设置 LED 电流
  * @param red 红光电流 (0-255)
  * @param ir 红外光电流 (0-255)

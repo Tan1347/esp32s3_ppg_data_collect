@@ -81,7 +81,6 @@ static TaskHandle_t s_button1_task_handle = NULL;
 /* PPG algorithm context (in BSS to avoid stack overflow) */
 static ppg_algo_ctx_t s_algo_ctx;
 static ppg_algo_result_t s_algo_result;
-static max30102_raw_t s_raw_sample;
 
 /* Forward declarations */
 static void ppg_task(void *arg);
@@ -469,18 +468,44 @@ static void ppg_task(void *arg)
     max30102_start();
     s_ppg_collecting = true;
 
-#if BATTERY_CHECK_ENABLE
-    int sample_count = 0;
-#endif
     int no_data_sec = 0;
     int invalid_sec = 0;  /* Consecutive seconds with invalid result */
     int64_t last_data_time = esp_timer_get_time();
+    int total_samples = 0;  /* For battery check */
+
+    /* Batch buffer for interrupt-driven reading */
+    max30102_raw_t batch_buf[32];
 
     while (s_system_state == STATE_MEASURING || s_system_state == STATE_STANDALONE) {
-        /* Check battery every 100 samples (~1s) */
+        /* Wait for MAX30102 interrupt (FIFO data ready) */
+        esp_err_t ret = max30102_wait_data(1000);
+        if (ret != ESP_OK) {
+            int64_t now = esp_timer_get_time();
+            no_data_sec = (int)((now - last_data_time) / 1000000);
+            if (no_data_sec >= 60) {
+                puts("[PPG] No data for 1min, stop");
+                break;
+            }
+            continue;
+        }
+
+        /* Batch read all available samples */
+        uint8_t count = max30102_read_fifo_batch(batch_buf, 32);
+        if (count == 0) continue;
+
+        last_data_time = esp_timer_get_time();
+        no_data_sec = 0;
+
+        /* Process each sample */
+        for (int i = 0; i < count; i++) {
+            sd_storage_write_raw(&batch_buf[i]);
+            ppg_algo_add_sample(&s_algo_ctx, batch_buf[i].red, batch_buf[i].ir);
+            total_samples++;
+        }
+
 #if BATTERY_CHECK_ENABLE
-        if (++sample_count >= 100) {
-            sample_count = 0;
+        if (total_samples >= 100) {
+            total_samples = 0;
             uint8_t batt_pct = battery_voltage_to_soc(battery_get_voltage());
             if (batt_pct < BATTERY_PPG_MIN_SOC) {
                 printf("[PPG] Battery low (%d%%), stop\n", batt_pct);
@@ -489,29 +514,7 @@ static void ppg_task(void *arg)
         }
 #endif
 
-        /* Read MAX30102 */
-        esp_err_t ret = max30102_read_sample(&s_raw_sample);
-        if (ret != ESP_OK) {
-            int64_t now = esp_timer_get_time();
-            no_data_sec = (int)((now - last_data_time) / 1000000);
-            if (no_data_sec >= 60) {
-                puts("[PPG] No data for 1min, stop");
-                break;
-            }
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
-        }
-
-        last_data_time = esp_timer_get_time();
-        no_data_sec = 0;
-
-        /* Write to SD card */
-        sd_storage_write_raw(&s_raw_sample);
-
-        /* Add to algorithm buffer */
-        ppg_algo_add_sample(&s_algo_ctx, s_raw_sample.red, s_raw_sample.ir);
-
-        /* Process algorithm */
+        /* Process algorithm (every ~5s when buffer full) */
         if (ppg_algo_process(&s_algo_ctx, &s_algo_result)) {
             sd_storage_write_csv(&s_algo_result);
             ble_svc_notify_live_data(&s_algo_result);
