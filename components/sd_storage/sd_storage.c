@@ -410,8 +410,7 @@ esp_err_t sd_storage_write_raw(const sd_raw_record_t *sample)
             flush_buffer(s_active_buf, s_raw_fd);
         }
         if (s_raw_fd >= 0) close(s_raw_fd);
-        strncpy(s_current_raw_path, new_path, sizeof(s_current_raw_path) - 1);
-        s_current_raw_path[sizeof(s_current_raw_path) - 1] = '\0';
+        snprintf(s_current_raw_path, sizeof(s_current_raw_path), "%s", new_path);
         s_raw_fd = open(new_path, O_WRONLY | O_CREAT | O_APPEND, 0666);
         xSemaphoreGive(s_buf_mutex);
         if (s_raw_fd < 0) {
@@ -465,8 +464,7 @@ esp_err_t sd_storage_write_csv(const ppg_result_t *result)
             s_csv_buf_pos = 0;
         }
         if (s_csv_fd >= 0) close(s_csv_fd);
-        strncpy(s_current_csv_path, new_path, sizeof(s_current_csv_path) - 1);
-        s_current_csv_path[sizeof(s_current_csv_path) - 1] = '\0';
+        snprintf(s_current_csv_path, sizeof(s_current_csv_path), "%s", new_path);
         s_csv_fd = open(new_path, O_WRONLY | O_CREAT | O_APPEND, 0666);
         if (s_csv_fd < 0) {
             ESP_LOGE(TAG, "Open CSV file failed: %s", new_path);

@@ -644,7 +644,7 @@ static void enter_ble_pairing(void)
 
     if (connected) {
         puts("BLE connected");
-        s_system_state = STATE_BLE_CONNECTED;
+        system_set_state(STATE_BLE_CONNECTED);
     } else {
         request_deep_sleep("BLE timeout");
     }
@@ -758,7 +758,7 @@ static void request_deep_sleep(const char *reason)
 {
     printf("[SLEEP] Requesting deep-sleep: %s\n", reason);
     s_sleep_reason = reason;
-    s_system_state = STATE_DEEP_SLEEP;
+    system_set_state(STATE_DEEP_SLEEP);
 }
 
 /**
@@ -813,7 +813,7 @@ static void enter_deep_sleep(void)
         esp_task_wdt_reset();
         if (gpio_get_level(MAX30102_INT_PIN) == 0) {
             puts("MAX30102 interrupt detected, cancel deep-sleep");
-            s_system_state = STATE_STANDALONE;
+            system_set_state(STATE_STANDALONE);
             return;
         }
     }

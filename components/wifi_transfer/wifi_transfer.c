@@ -124,10 +124,9 @@ static esp_err_t api_files_handler(httpd_req_t *req)
 {
     char *buf = malloc(1024);
     if (!buf) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "内存不足");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
         return ESP_FAIL;
     }
-
     s_cbs->sd_get_file_list(buf, 1024);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, buf, strlen(buf));
@@ -383,10 +382,9 @@ static esp_err_t api_logs_handler(httpd_req_t *req)
 
     char *buf = malloc(512);
     if (!buf) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "内存不足");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
         return ESP_FAIL;
     }
-
     int pos = snprintf(buf, 512, "{\"logs\":[");
 
     DIR *dir = opendir(path);
@@ -503,7 +501,7 @@ static esp_err_t api_file_delete_handler(httpd_req_t *req)
     }
 
     /* Path traversal protection */
-    if (strstr(filepath, "..") || strchr(filepath, '\\')) {
+    if (strstr(filepath, "..") || strchr(filepath, '/') || strchr(filepath, '\\')) {
         ESP_LOGW(TAG, "Path traversal attempt: %s", filepath);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid path");
         return ESP_FAIL;

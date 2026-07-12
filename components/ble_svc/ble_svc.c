@@ -784,7 +784,7 @@ esp_err_t ble_svc_init(const ble_callbacks_t *callbacks)
     }
 
     /* Create command handler task */
-    xTaskCreate(ble_cmd_task, "ble_cmd", 4096, NULL, 3, &s_cmd_task_handle);
+    xTaskCreate(ble_cmd_task, "ble_cmd", 6144, NULL, 3, &s_cmd_task_handle);
     ESP_LOGI(TAG, "Cmd task created");
 
     /* Init NimBLE */

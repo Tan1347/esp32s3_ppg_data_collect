@@ -118,59 +118,73 @@ void ppg_algo_find_peaks(int32_t *pn_locs, int32_t *pn_npks, int32_t *pn_x,
     *pn_npks = min_val(*pn_npks, n_max_num);
 }
 
+/* ==================== 信号预处理 (共用) ==================== */
+
+/**
+ * @brief IR signal preprocessing: DC removal → MA4 → differential → MA2 → Hamming
+ *
+ * Outputs filtered signal in an_dx and peak locations in peak_locs.
+ * Uses static buffers (not thread-safe, but called sequentially).
+ */
+static void preprocess_ir_signal(const uint32_t *ir_buffer, int32_t buffer_length,
+                                  int32_t *an_dx, int32_t *peak_locs, int32_t *n_npks)
+{
+    static int32_t an_x[PPG_ALGO_BUFFER_SIZE];
+
+    /* Remove DC */
+    uint32_t un_ir_mean = 0;
+    for (int32_t k = 0; k < buffer_length; k++)
+        un_ir_mean += ir_buffer[k];
+    un_ir_mean /= buffer_length;
+    for (int32_t k = 0; k < buffer_length; k++)
+        an_x[k] = (int32_t)ir_buffer[k] - (int32_t)un_ir_mean;
+
+    /* 4-point moving average */
+    for (int32_t k = 0; k < PPG_ALGO_BUFFER_SIZE - PPG_ALGO_MA4_SIZE; k++)
+        an_x[k] = (an_x[k] + an_x[k+1] + an_x[k+2] + an_x[k+3]) / 4;
+
+    /* Differential */
+    for (int32_t k = 0; k < PPG_ALGO_BUFFER_SIZE - PPG_ALGO_MA4_SIZE - 1; k++)
+        an_dx[k] = an_x[k+1] - an_x[k];
+
+    /* 2-point moving average */
+    for (int32_t k = 0; k < PPG_ALGO_BUFFER_SIZE - PPG_ALGO_MA4_SIZE - 2; k++)
+        an_dx[k] = (an_dx[k] + an_dx[k+1]) / 2;
+
+    /* Hamming window (invert signal for valley detection) */
+    for (int32_t i = 0; i < PPG_ALGO_BUFFER_SIZE - PPG_ALGO_HAMMING_SIZE - PPG_ALGO_MA4_SIZE - 2; i++) {
+        int32_t s = 0;
+        for (int32_t k = i; k < i + PPG_ALGO_HAMMING_SIZE; k++)
+            s -= an_dx[k] * auw_hamm[k - i];
+        an_dx[i] = s / 1146;
+    }
+
+    /* Calculate threshold */
+    int32_t n_th1 = 0;
+    for (int32_t k = 0; k < PPG_ALGO_BUFFER_SIZE - PPG_ALGO_HAMMING_SIZE; k++)
+        n_th1 += (an_dx[k] > 0) ? an_dx[k] : (0 - an_dx[k]);
+    n_th1 /= (PPG_ALGO_BUFFER_SIZE - PPG_ALGO_HAMMING_SIZE);
+
+    /* Peak detection */
+    ppg_algo_find_peaks(peak_locs, n_npks, an_dx,
+                         PPG_ALGO_BUFFER_SIZE - PPG_ALGO_HAMMING_SIZE,
+                         n_th1, 8, 5);
+}
+
 /* ==================== 心率计算 ==================== */
 
 void ppg_algo_calc_hr(uint32_t *ir_buffer, int32_t buffer_length,
                        int32_t *heart_rate, int8_t *hr_valid)
 {
-    static int32_t an_x[PPG_ALGO_BUFFER_SIZE];
     static int32_t an_dx[PPG_ALGO_BUFFER_SIZE - PPG_ALGO_MA4_SIZE];
 
-    uint32_t un_ir_mean;
-    int32_t k, n_th1, n_npks, n_peak_interval_sum;
+    int32_t k, n_npks, n_peak_interval_sum;
     int32_t an_dx_peak_locs[PPG_ALGO_MAX_PEAKS];
 
-    /* 去除 DC */
-    un_ir_mean = 0;
-    for (k = 0; k < buffer_length; k++)
-        un_ir_mean += ir_buffer[k];
-    un_ir_mean = un_ir_mean / buffer_length;
-    for (k = 0; k < buffer_length; k++)
-        an_x[k] = (int32_t)ir_buffer[k] - (int32_t)un_ir_mean;
+    /* Shared preprocessing: DC → MA4 → diff → MA2 → Hamming → peaks */
+    preprocess_ir_signal(ir_buffer, buffer_length, an_dx, an_dx_peak_locs, &n_npks);
 
-    /* 4 点移动平均 */
-    for (k = 0; k < PPG_ALGO_BUFFER_SIZE - PPG_ALGO_MA4_SIZE; k++) {
-        an_x[k] = (an_x[k] + an_x[k+1] + an_x[k+2] + an_x[k+3]) / 4;
-    }
-
-    /* 差分 */
-    for (k = 0; k < PPG_ALGO_BUFFER_SIZE - PPG_ALGO_MA4_SIZE - 1; k++)
-        an_dx[k] = an_x[k+1] - an_x[k];
-
-    /* 2 点移动平均 */
-    for (k = 0; k < PPG_ALGO_BUFFER_SIZE - PPG_ALGO_MA4_SIZE - 2; k++)
-        an_dx[k] = (an_dx[k] + an_dx[k+1]) / 2;
-
-    /* Hamming 窗 (翻转信号用于波谷检测) */
-    for (int32_t i = 0; i < PPG_ALGO_BUFFER_SIZE - PPG_ALGO_HAMMING_SIZE - PPG_ALGO_MA4_SIZE - 2; i++) {
-        int32_t s = 0;
-        for (k = i; k < i + PPG_ALGO_HAMMING_SIZE; k++)
-            s -= an_dx[k] * auw_hamm[k - i];
-        an_dx[i] = s / 1146;
-    }
-
-    /* 计算阈值 */
-    n_th1 = 0;
-    for (k = 0; k < PPG_ALGO_BUFFER_SIZE - PPG_ALGO_HAMMING_SIZE; k++)
-        n_th1 += (an_dx[k] > 0) ? an_dx[k] : (0 - an_dx[k]);
-    n_th1 = n_th1 / (PPG_ALGO_BUFFER_SIZE - PPG_ALGO_HAMMING_SIZE);
-
-    /* 峰值检测 */
-    ppg_algo_find_peaks(an_dx_peak_locs, &n_npks, an_dx,
-                         PPG_ALGO_BUFFER_SIZE - PPG_ALGO_HAMMING_SIZE,
-                         n_th1, 8, 5);
-
-    /* 计算心率 */
+    /* Calculate heart rate from peak intervals */
     n_peak_interval_sum = 0;
     if (n_npks >= 2 && n_npks <= 25) {
         for (k = 1; k < n_npks; k++)
@@ -199,46 +213,14 @@ void ppg_algo_calc_spo2(uint32_t *ir_buffer, uint32_t *red_buffer,
     static int32_t an_y[PPG_ALGO_BUFFER_SIZE];
     static int32_t an_dx[PPG_ALGO_BUFFER_SIZE - PPG_ALGO_MA4_SIZE];
 
-    uint32_t un_ir_mean;
-    int32_t k, n_th1, n_npks;
+    int32_t k, n_npks;
     int32_t an_dx_peak_locs[PPG_ALGO_MAX_PEAKS];
     int32_t an_ir_valley_locs[PPG_ALGO_MAX_PEAKS];
     int32_t an_exact_ir_valley_locs[PPG_ALGO_MAX_PEAKS];
     int32_t n_exact_ir_valley_locs_count;
 
-    /* Step 1: 去除 DC + 4 点移动平均 + 差分 + Hamming 滤波 */
-    un_ir_mean = 0;
-    for (k = 0; k < buffer_length; k++)
-        un_ir_mean += ir_buffer[k];
-    un_ir_mean = un_ir_mean / buffer_length;
-    for (k = 0; k < buffer_length; k++)
-        an_x[k] = (int32_t)ir_buffer[k] - (int32_t)un_ir_mean;
-
-    for (k = 0; k < PPG_ALGO_BUFFER_SIZE - PPG_ALGO_MA4_SIZE; k++)
-        an_x[k] = (an_x[k] + an_x[k+1] + an_x[k+2] + an_x[k+3]) / 4;
-
-    for (k = 0; k < PPG_ALGO_BUFFER_SIZE - PPG_ALGO_MA4_SIZE - 1; k++)
-        an_dx[k] = an_x[k+1] - an_x[k];
-
-    for (k = 0; k < PPG_ALGO_BUFFER_SIZE - PPG_ALGO_MA4_SIZE - 2; k++)
-        an_dx[k] = (an_dx[k] + an_dx[k+1]) / 2;
-
-    for (int32_t i = 0; i < PPG_ALGO_BUFFER_SIZE - PPG_ALGO_HAMMING_SIZE - PPG_ALGO_MA4_SIZE - 2; i++) {
-        int32_t s = 0;
-        for (k = i; k < i + PPG_ALGO_HAMMING_SIZE; k++)
-            s -= an_dx[k] * auw_hamm[k - i];
-        an_dx[i] = s / 1146;
-    }
-
-    /* Step 2: 峰值检测 */
-    n_th1 = 0;
-    for (k = 0; k < PPG_ALGO_BUFFER_SIZE - PPG_ALGO_HAMMING_SIZE; k++)
-        n_th1 += (an_dx[k] > 0) ? an_dx[k] : (0 - an_dx[k]);
-    n_th1 = n_th1 / (PPG_ALGO_BUFFER_SIZE - PPG_ALGO_HAMMING_SIZE);
-
-    ppg_algo_find_peaks(an_dx_peak_locs, &n_npks, an_dx,
-                         PPG_ALGO_BUFFER_SIZE - PPG_ALGO_HAMMING_SIZE,
-                         n_th1, 8, 5);
+    /* Shared preprocessing: DC → MA4 → diff → MA2 → Hamming → peaks */
+    preprocess_ir_signal(ir_buffer, buffer_length, an_dx, an_dx_peak_locs, &n_npks);
 
     /* Step 3: 定位波谷 */
     for (k = 0; k < n_npks; k++)
