@@ -654,8 +654,13 @@ static void enter_ble_pairing(void)
         return;
     }
 
+    esp_err_t ret = ble_svc_start_advertising();
+    if (ret != ESP_OK) {
+        printf("[BLE] Advertising start failed: %s\n", esp_err_to_name(ret));
+        request_deep_sleep("BLE adv failed");
+        return;
+    }
     puts("BLE advertising started");
-    ble_svc_start_advertising();
 
     bool connected = poll_until(ble_svc_is_connected, timeout_sec, "BLE connect");
 
