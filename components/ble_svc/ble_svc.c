@@ -95,11 +95,19 @@ typedef struct {
 static QueueHandle_t s_cmd_queue = NULL;
 static TaskHandle_t  s_cmd_task_handle = NULL;
 
+/* ========== BLE Notify Task (decoupled from PPG task) ========== */
+#define BLE_NOTIFY_QUEUE_DEPTH  4
+#define BLE_NOTIFY_PAYLOAD_SIZE 5
+
+static QueueHandle_t s_notify_queue = NULL;
+static TaskHandle_t  s_notify_task_handle = NULL;
+
 /* 前向声明 */
 static int gatt_handler(uint16_t conn_handle, uint16_t attr_handle,
                         struct ble_gatt_access_ctxt *ctxt, void *arg);
 static int gap_event(struct ble_gap_event *event, void *arg);
 static void ble_cmd_task(void *arg);
+static void ble_notify_task(void *arg);
 
 /* ========== GATT 服务定义 ========== */
 
@@ -829,7 +837,35 @@ esp_err_t ble_svc_init(const ble_callbacks_t *callbacks)
     nimble_port_freertos_init(ble_host_task);
 
     printf("[BLE] service init done (name=%s)\n", BLE_DEVICE_NAME);
+
+    /* Create notify queue and task */
+    s_notify_queue = xQueueCreate(BLE_NOTIFY_QUEUE_DEPTH, BLE_NOTIFY_PAYLOAD_SIZE);
+    if (!s_notify_queue) {
+        ESP_LOGE(TAG, "Create notify queue failed");
+        return ESP_ERR_NO_MEM;
+    }
+    xTaskCreate(ble_notify_task, "ble_notify", STACK_BLE_NOTIFY, NULL, 3, &s_notify_task_handle);
+
     return ESP_OK;
+}
+
+static void ble_notify_task(void *arg)
+{
+    uint8_t payload[BLE_NOTIFY_PAYLOAD_SIZE];
+
+    while (1) {
+        if (xQueueReceive(s_notify_queue, payload, portMAX_DELAY) == pdTRUE) {
+            if (!s_connected) continue;
+
+            struct os_mbuf *om = ble_hs_mbuf_from_flat(payload, BLE_NOTIFY_PAYLOAD_SIZE);
+            if (!om) continue;
+
+            int ret = ble_gattc_notify_custom(s_conn_handle, s_char_live_handle, om);
+            if (ret != 0) {
+                BLE_DEBUG_LOG("Live notify failed: %d", ret);
+            }
+        }
+    }
 }
 
 esp_err_t ble_svc_start_advertising(void)
@@ -890,22 +926,21 @@ esp_err_t ble_svc_stop_advertising(void)
 esp_err_t ble_svc_notify_live_data(const ppg_result_t *result)
 {
     if (!s_connected) return ESP_ERR_INVALID_STATE;
+    if (!s_notify_queue) return ESP_ERR_INVALID_STATE;
 
     int32_t hr = result->hr_valid ? result->heart_rate : 0;
     int32_t spo2 = result->spo2_valid ? result->spo2 : 0;
 
-    s_live_data[0] = (hr >> 8) & 0xFF;
-    s_live_data[1] = hr & 0xFF;
-    s_live_data[2] = (uint8_t)spo2;
-    s_live_data[3] = 0;
-    s_live_data[4] = (result->hr_valid && result->spo2_valid) ? BLE_QUALITY_VALID : BLE_QUALITY_INVALID;
+    uint8_t payload[BLE_NOTIFY_PAYLOAD_SIZE];
+    payload[0] = (hr >> 8) & 0xFF;
+    payload[1] = hr & 0xFF;
+    payload[2] = (uint8_t)spo2;
+    payload[3] = 0;
+    payload[4] = (result->hr_valid && result->spo2_valid) ? BLE_QUALITY_VALID : BLE_QUALITY_INVALID;
 
-    struct os_mbuf *om = ble_hs_mbuf_from_flat(s_live_data, 5);
-    if (!om) return ESP_ERR_NO_MEM;
-
-    int ret = ble_gattc_notify_custom(s_conn_handle, s_char_live_handle, om);
-    if (ret != 0) {
-        ESP_LOGD(TAG, "Live Data notify failed: %d", ret);
+    if (xQueueSend(s_notify_queue, payload, 0) != pdTRUE) {
+        BLE_DEBUG_LOG("Notify queue full, dropping");
+        return ESP_ERR_NO_MEM;
     }
 
     return ESP_OK;

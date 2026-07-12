@@ -20,6 +20,7 @@
 #include "ppg_log.h"
 #include "ppg_config.h"
 #include "esp_log.h"
+#include "driver/uart.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -93,8 +94,9 @@ static size_t ring_buf_read(char *buf, size_t max_len)
 #if PPG_LOG_UART_ENABLE
 static void uart_output(const char *str, size_t len)
 {
-    fwrite(str, 1, len, stdout);
-    fflush(stdout);
+    /* Use UART driver directly to avoid stdout duplication from
+     * ESP-IDF VFS console registering both UART0 and USB-JTAG */
+    uart_write_bytes(CONFIG_ESP_CONSOLE_UART_NUM, str, len);
 }
 #endif
 

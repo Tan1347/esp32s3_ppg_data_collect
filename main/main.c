@@ -473,6 +473,7 @@ static void ppg_task(void *arg)
     int no_data_sec = 0;
     int invalid_sec = 0;  /* Consecutive seconds with invalid result */
     int64_t last_data_time = esp_timer_get_time();
+    int64_t algo_start_time = esp_timer_get_time();  /* Wall-clock for bad signal timeout */
     int total_samples = 0;  /* For battery check */
 
     /* Batch buffer for interrupt-driven reading */
@@ -521,34 +522,19 @@ static void ppg_task(void *arg)
             sd_storage_write_csv(&s_algo_result);
             ble_svc_notify_live_data(&s_algo_result);
 
-#if PPG_DEBUG_ENABLE
-            printf("[PPG] HR=%ld(%c) SpO2=%ld(%c) Q=%d PK=%d IR_DC=%lu IR_Amp=%lu RED_DC=%lu R=%ld\n",
-                   (long)s_algo_result.heart_rate, s_algo_result.hr_valid ? 'V' : 'I',
-                   (long)s_algo_result.spo2, s_algo_result.spo2_valid ? 'V' : 'I',
-                   s_algo_result.quality,
-                   s_algo_result.peak_count,
-                   (unsigned long)s_algo_result.ir_dc_mean,
-                   (unsigned long)s_algo_result.ir_amplitude,
-                   (unsigned long)s_algo_result.red_dc_mean,
-                   (long)s_algo_result.spo2_ratio);
-#endif
-
             /* Check data validity (perfusion ratio) */
             bool data_valid = s_algo_result.hr_valid || s_algo_result.spo2_valid;
-#if PPG_DEBUG_ENABLE
-            /* Also reject if IR amplitude too low (no finger) */
-            if (s_algo_result.ir_amplitude < IR_AMPLITUDE_NO_FINGER) data_valid = false;
-#endif
             if (!data_valid) {
-                invalid_sec += 5;  /* Algorithm processes every 5s */
-                printf("[PPG] Invalid data, %ds/%ds\n", invalid_sec, BAD_SIGNAL_TIMEOUT_SEC);
+                /* Use real wall-clock time instead of hardcoded += 5 */
+                int64_t now = esp_timer_get_time();
+                invalid_sec = (int)((now - algo_start_time) / 1000000);
                 if (invalid_sec >= BAD_SIGNAL_TIMEOUT_SEC) {
-                    puts("[PPG] Bad signal for 10s, stopping");
+                    puts("[PPG] Bad signal timeout, stopping");
                     s_bad_signal = true;
                     break;
                 }
             } else {
-                invalid_sec = 0;  /* Reset on valid data */
+                algo_start_time = esp_timer_get_time();  /* Reset on valid data */
             }
         }
     }
