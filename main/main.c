@@ -377,6 +377,7 @@ static void button1_task(void *arg)
         /* Button pressed, start timing */
         puts("[BUTTON1] Pressed, detecting...");
         int press_ms = 0;
+        bool long_pressed = false;
         while (gpio_get_level(BUTTON1_GPIO) == 0) {
             vTaskDelay(pdMS_TO_TICKS(100));
             press_ms += 100;
@@ -388,9 +389,14 @@ static void button1_task(void *arg)
                     vTaskDelay(pdMS_TO_TICKS(50));
                 }
                 system_set_state(STATE_BLE_PAIRING);
-                vTaskDelay(pdMS_TO_TICKS(500));
-                continue;
+                long_pressed = true;
+                break;
             }
+        }
+
+        if (long_pressed) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
         }
 
         /* Short press released, wait for double click */
