@@ -77,6 +77,7 @@ static uint16_t s_char_filelist_handle;
 static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static bool s_connected = false;
 static bool s_status_subscribed = false;
+static bool s_nimble_synced = false;
 
 /* 状态数据 */
 static uint8_t s_status_data[20];
@@ -743,6 +744,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
 static void ble_on_sync(void)
 {
     ESP_LOGI(TAG, "NimBLE synced");
+    s_nimble_synced = true;
 
     int ret = ble_hs_util_ensure_addr(0);
     if (ret != 0) {
@@ -756,6 +758,7 @@ static void ble_on_sync(void)
 static void ble_on_reset(int reason)
 {
     ESP_LOGE(TAG, "NimBLE reset, reason=%d", reason);
+    s_nimble_synced = false;
 }
 
 static void ble_host_task(void *param)
@@ -826,6 +829,11 @@ esp_err_t ble_svc_init(const ble_callbacks_t *callbacks)
 
 esp_err_t ble_svc_start_advertising(void)
 {
+    if (!s_nimble_synced) {
+        BLE_DEBUG_LOG("NimBLE not synced yet, skip advertising");
+        return ESP_ERR_INVALID_STATE;
+    }
+
     struct ble_gap_adv_params adv_params = {
         .conn_mode = BLE_GAP_CONN_MODE_UND,
         .disc_mode = BLE_GAP_DISC_MODE_GEN,
