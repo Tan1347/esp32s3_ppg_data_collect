@@ -21,7 +21,6 @@
 | WiFi | Station 模式，HTTP Server，文件传输 + Web 管理 + OTA |
 | TF 卡 | FAT32 + LZ4 压缩，主备缓冲 (32KB+8KB)，SPI 400kHz→20MHz |
 | UART 录制 | 双缓冲 (2x16KB)，支持 9600~5Mbps 波特率 |
-| DHT11 | 温湿度监测，二进制格式存储 |
 | OTA | 双分区 A/B，SHA-256 校验，60 秒启动自检，失败自动回滚 |
 | 电源 | DFS 动态调频，Auto Light-sleep，Deep-sleep，电池电量保护（可禁用） |
 
@@ -54,7 +53,6 @@
 | MAX_INT | GPIO12 | MAX30102 中断输出 (低电平有效, Deep-sleep 唤醒) |
 | SD_SPI_CLK | GPIO13 | TF 卡 SPI 时钟 |
 | SD_SPI_CS | GPIO14 | TF 卡片选 |
-| DHT11 | GPIO15 | 温湿度传感器 |
 | SD_SPI_MISO | GPIO16 | TF 卡 SPI 主入 |
 | SD_SPI_MOSI | GPIO17 | TF 卡 SPI 主出 |
 | BUTTON1 | GPIO18 | 用户按钮 (单击=切换模式, 双击=WiFi, 长按=BLE) |
@@ -93,7 +91,6 @@ esp32s3/
 │   ├── wifi_prov/              # WiFi 配网 (NVS, 自动连接)
 │   ├── wifi_transfer/          # HTTP 服务器 (文件下载, OTA上传)
 │   ├── battery/                # 电池 ADC 检测 + 电量计算
-│   ├── dht11/                  # DHT11 温湿度驱动
 │   ├── ota_upgrade/            # OTA 升级 (双分区, SHA-256)
 │   ├── power_mgmt/             # 电源管理 (DFS, Deep-sleep)
 │   ├── ppg_log/                # 异步日志系统 (环形缓冲, 文件输出)
@@ -317,14 +314,52 @@ WiFi 连接后通过局域网 IP 访问。
 
 ```
 /sdcard/
-├── raw/                    # 原始 PPG 数据
+├── raw/                    # 原始 PPG 数据 (二进制)
 │   └── 20260705_120000.bin.lz4
-├── csv/                    # 心率/血氧结果
+├── csv/                    # 心率/血氧结果 (二进制)
 │   └── 20260705.csv
-├── env/                    # DHT11 温湿度数据
-│   └── 20260705.env
 └── log/                    # 运行日志
     └── 20260705_123456.log
+```
+
+### 二进制数据格式
+
+所有存储文件均为二进制格式，每条记录带 XOR 校验。
+
+#### 原始 PPG 数据 (raw/) - 13 字节/记录
+
+```
+偏移  长度  字段        类型     说明
+0     4     timestamp  uint32   Unix 时间戳 (秒)
+4     4     red        uint32   红光 ADC 原始值
+8     4     ir         uint32   红外光 ADC 原始值
+12    1     checksum   uint8    XOR(前12字节)
+```
+
+**存储速率**: 100Hz 采样 = 1.3KB/s = **4.68MB/小时**
+
+#### 算法结果 (csv/) - 14 字节/记录
+
+```
+偏移  长度  字段        类型     说明
+0     4     timestamp  uint32   Unix 时间戳 (秒)
+4     4     heart_rate int32    心率 (bpm), -999=无效
+8     4     spo2       int32    血氧 (%), -999=无效
+12    1     hr_valid   uint8    心率有效 (1=有效)
+13    1     spo2_valid uint8    血氧有效 (1=有效)
+14    1     checksum   uint8    XOR(前14字节)
+```
+
+**输出频率**: 每 5 秒 1 条记录
+
+#### 环境数据 (env/) - 9 字节/记录
+
+```
+偏移  长度  字段        类型     说明
+0     4     timestamp  uint32   Unix 时间戳 (秒)
+4     2     temperature int16   温度 (×10, 如 235=23.5°C)
+6     2     humidity   int16    湿度 (×10, 如 652=65.2%)
+8     1     checksum   uint8    XOR(前8字节)
 ```
 
 ### SPI 时钟策略
@@ -338,7 +373,7 @@ WiFi 连接后通过局域网 IP 访问。
 
 ## PPG 算法
 
-全定点运算，无 FPU 依赖。
+全定点运算，无 FPU 依赖。5 秒滑动窗口，100Hz 采样 = 500 点。
 
 | 算法 | 方法 | 代码大小 |
 |------|------|----------|
@@ -346,6 +381,23 @@ WiFi 连接后通过局域网 IP 访问。
 | 血氧 (SpO2) | R/IR 比值，DC/AC 分量，查找表校准 | 约 3KB |
 | 灌注指数 (PI) | AC/DC × 100% | 约 1KB |
 | 带通滤波器 | IIR 带通 0.5-4Hz | 约 2KB |
+
+### 串口输出格式
+
+```
+[PPG] HR=153(V) SpO2=98(V) Q=20 PK=15 IR_DC=144595 IR_Amp=1704 RED_DC=122292 R=-1
+```
+
+| 字段 | 说明 |
+|------|------|
+| HR | 心率 (bpm), (V)=有效, (I)=无效 |
+| SpO2 | 血氧饱和度 (%), -999=无效 |
+| Q | 信号质量 (0-100) |
+| PK | 检测到的峰值数 |
+| IR_DC | IR 信号直流均值 |
+| IR_Amp | IR 信号幅度 (max-min) |
+| RED_DC | RED 信号直流均值 |
+| R | SpO2 R 值 = (AC_red/DC_red)/(AC_ir/DC_ir) × 100 |
 
 ---
 
@@ -365,7 +417,6 @@ WiFi 连接后通过局域网 IP 访问。
 |------|--------|--------|------|
 | ppg_task | 5 | 4KB | I2C 读取 MAX30102 + 算法处理 |
 | power_task | 1 | 2KB | ADC 电池电压监控 |
-| dht11_task | 2 | 2KB | DHT11 温湿度采集 |
 
 **BLE 任务**（BLE 初始化时创建）：
 
@@ -432,3 +483,4 @@ echo "1.0.5" > version.txt
 | 1.0.3 | 2026-07-05 | 修复 UART 波特率配置（CUSTOM 模式）、GPIO0 上拉 |
 | 1.0.4 | 2026-07-05 | 上电挂载 TF 卡并打印占用、修复 BLE cmd 0x22 双重响应 |
 | 1.0.5 | 2026-07-05 | 更新文档、Bootloader UART 配置修复 |
+| 1.0.6 | 2026-07-12 | 移除 DHT11 模块、修复 deep-sleep WDT 超时、更新 PPG 数据格式文档 |

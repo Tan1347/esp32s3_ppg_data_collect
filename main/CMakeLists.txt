@@ -25,6 +25,5 @@ idf_component_register(
         ota_upgrade
         ppg_log
         power_mgmt
-        dht11
         uart_recorder
 )

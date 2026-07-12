@@ -70,7 +70,6 @@ esptool --chip esp32s3 --flash_mode dio --flash_size 16MB --flash_freq 80m \
 | 12 | MAX_INT | MAX30102中断/Deep-sleep唤醒 |
 | 13 | SD_SPI_CLK | TF卡时钟 |
 | 14 | SD_SPI_CS | TF卡片选 |
-| 15 | DHT11 | 温湿度传感器 |
 | 16 | SD_SPI_MISO | TF卡数据 |
 | 17 | SD_SPI_MOSI | TF卡数据 |
 | 18 | BUTTON1 | 用户按钮（低电平有效） |
@@ -100,7 +99,7 @@ esptool --chip esp32s3 --flash_mode dio --flash_size 16MB --flash_freq 80m \
 1. Bootloader (115200 baud)
 2. App 启动 (切换到 1000000 baud)
 3. 显示版本信息
-4. 系统初始化 (NVS → Netif → Log → Power → Battery → SD → MAX30102 → DHT11 → OTA → UART)
+4. 系统初始化 (NVS → Netif → Log → Power → Battery → SD → MAX30102 → OTA → UART)
 5. 上电时挂载 TF 卡并打印占用情况
 6. 检查 BUTTON1 状态决定启动模式
 7. 进入对应工作模式

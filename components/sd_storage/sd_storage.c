@@ -62,19 +62,12 @@ static bool s_mounted = false;
 /* Current file names */
 static char s_current_raw_path[64];
 static char s_current_csv_path[64];
-static char s_current_dht11_path[64];
-
-/* DHT11 buffer */
-static char    *s_dht11_buf = NULL;
-static size_t   s_dht11_buf_pos = 0;
-static int      s_dht11_fd = -1;
 
 /* Mutex for buffer switching */
 static SemaphoreHandle_t s_buf_mutex = NULL;
 
-/* Mutex for CSV and DHT11 buffer access */
+/* Mutex for CSV buffer access */
 static SemaphoreHandle_t s_csv_mutex = NULL;
-static SemaphoreHandle_t s_dht11_mutex = NULL;
 
 /* ========== 文件名生成 ========== */
 
@@ -101,19 +94,6 @@ static void generate_csv_filename(char *buf, size_t len)
                  tm_info->tm_mday);
     } else {
         snprintf(buf, len, "%s/csv/unknown.csv", MOUNT_POINT);
-    }
-}
-
-static void generate_dht11_filename(char *buf, size_t len)
-{
-    time_t now = time(NULL);
-    struct tm *tm_info = localtime(&now);
-    if (tm_info && tm_info->tm_year > 100) {
-        snprintf(buf, len, "%s/env/%04d%02d%02d.bin",
-                 MOUNT_POINT, tm_info->tm_year + 1900, tm_info->tm_mon + 1,
-                 tm_info->tm_mday);
-    } else {
-        snprintf(buf, len, "%s/env/unknown.bin", MOUNT_POINT);
     }
 }
 
@@ -375,25 +355,14 @@ esp_err_t sd_storage_mount(void)
         return ESP_ERR_NO_MEM;
     }
 
-    /* Allocate DHT11 buffer (prefer PSRAM) */
-    s_dht11_buf = heap_caps_malloc(CSV_BUF_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!s_dht11_buf) s_dht11_buf = malloc(CSV_BUF_SIZE);  /* Fallback */
-    if (!s_dht11_buf) {
-        ESP_LOGE(TAG, "DHT11 buffer alloc failed");
-        sd_storage_unmount();
-        return ESP_ERR_NO_MEM;
-    }
-
     s_csv_buf_pos = 0;
-    s_dht11_buf_pos = 0;
     s_active_buf = &s_primary_buf;  /* Default to primary buffer */
 
-    /* Create CSV and DHT11 mutexes */
+    /* Create CSV mutex */
     s_csv_mutex = xSemaphoreCreateMutex();
-    s_dht11_mutex = xSemaphoreCreateMutex();
 
-    ESP_LOGI(TAG, "Buffers: primary=%uKB, backup=%uKB, csv=%uKB, dht11=%uKB",
-             PRIMARY_BUF_SIZE/1024, BACKUP_BUF_SIZE/1024, CSV_BUF_SIZE/1024, CSV_BUF_SIZE/1024);
+    ESP_LOGI(TAG, "Buffers: primary=%uKB, backup=%uKB, csv=%uKB",
+             PRIMARY_BUF_SIZE/1024, BACKUP_BUF_SIZE/1024, CSV_BUF_SIZE/1024);
 
     return ESP_OK;
 }
@@ -412,17 +381,14 @@ esp_err_t sd_storage_unmount(void)
     /* Close files */
     if (s_raw_fd >= 0) { close(s_raw_fd); s_raw_fd = -1; }
     if (s_csv_fd >= 0) { close(s_csv_fd); s_csv_fd = -1; }
-    if (s_dht11_fd >= 0) { close(s_dht11_fd); s_dht11_fd = -1; }
 
     /* Free buffers */
     if (s_primary_buf.data) { free(s_primary_buf.data); s_primary_buf.data = NULL; }
     if (s_backup_buf.data) { free(s_backup_buf.data); s_backup_buf.data = NULL; }
     if (s_csv_buf) { free(s_csv_buf); s_csv_buf = NULL; }
-    if (s_dht11_buf) { free(s_dht11_buf); s_dht11_buf = NULL; }
 
     /* Delete mutexes */
     if (s_csv_mutex) { vSemaphoreDelete(s_csv_mutex); s_csv_mutex = NULL; }
-    if (s_dht11_mutex) { vSemaphoreDelete(s_dht11_mutex); s_dht11_mutex = NULL; }
 
     /* Unmount */
     esp_vfs_fat_sdcard_unmount(MOUNT_POINT, s_card);
@@ -538,51 +504,6 @@ esp_err_t sd_storage_write_csv(const ppg_result_t *result)
     return ESP_OK;
 }
 
-esp_err_t sd_storage_write_dht11(int temperature, int humidity)
-{
-    if (!s_mounted) return ESP_ERR_INVALID_STATE;
-
-    xSemaphoreTake(s_dht11_mutex, portMAX_DELAY);
-
-    /* Check if need to create new file */
-    char new_path[64];
-    generate_dht11_filename(new_path, sizeof(new_path));
-    if (strcmp(new_path, s_current_dht11_path) != 0 || s_dht11_fd < 0) {
-        if (s_dht11_buf_pos > 0 && s_dht11_fd >= 0) {
-            safe_write(s_dht11_fd, s_dht11_buf, s_dht11_buf_pos);
-            s_dht11_buf_pos = 0;
-        }
-        if (s_dht11_fd >= 0) close(s_dht11_fd);
-        strncpy(s_current_dht11_path, new_path, sizeof(s_current_dht11_path) - 1);
-        s_current_dht11_path[sizeof(s_current_dht11_path) - 1] = '\0';
-        s_dht11_fd = open(new_path, O_WRONLY | O_CREAT | O_APPEND, 0666);
-        if (s_dht11_fd < 0) {
-            ESP_LOGE(TAG, "Open DHT11 file failed: %s", new_path);
-            xSemaphoreGive(s_dht11_mutex);
-            return ESP_ERR_NOT_FOUND;
-        }
-    }
-
-    /* Prepare binary record */
-    dht11_record_t record;
-    record.timestamp = (uint32_t)time(NULL);
-    record.temperature = (int16_t)(temperature * 10);  /* x10 */
-    record.humidity = (int16_t)(humidity * 10);        /* x10 */
-    record.checksum = calc_checksum(&record, sizeof(record));
-
-    /* Write to buffer */
-    if (s_dht11_buf_pos + sizeof(record) > CSV_BUF_SIZE) {
-        safe_write(s_dht11_fd, s_dht11_buf, s_dht11_buf_pos);
-        s_dht11_buf_pos = 0;
-    }
-
-    memcpy(s_dht11_buf + s_dht11_buf_pos, &record, sizeof(record));
-    s_dht11_buf_pos += sizeof(record);
-
-    xSemaphoreGive(s_dht11_mutex);
-    return ESP_OK;
-}
-
 esp_err_t sd_storage_flush(void)
 {
     if (!s_mounted) return ESP_OK;
@@ -608,17 +529,6 @@ esp_err_t sd_storage_flush(void)
             s_csv_buf_pos = 0;
         }
         xSemaphoreGive(s_csv_mutex);
-    }
-
-    /* Flush DHT11 buffer */
-    if (s_dht11_mutex && s_dht11_buf && s_dht11_fd >= 0) {
-        xSemaphoreTake(s_dht11_mutex, portMAX_DELAY);
-        if (s_dht11_buf_pos > 0) {
-            safe_write(s_dht11_fd, s_dht11_buf, s_dht11_buf_pos);
-            fsync(s_dht11_fd);
-            s_dht11_buf_pos = 0;
-        }
-        xSemaphoreGive(s_dht11_mutex);
     }
 
     return ESP_OK;
@@ -678,7 +588,7 @@ void sd_storage_release_buffers(void)
     s_mounted = false;
 
     /* Flush remaining data if buffers are still valid */
-    if (s_primary_buf.data || s_csv_buf || s_dht11_buf) {
+    if (s_primary_buf.data || s_csv_buf) {
         sd_storage_flush();
     }
 
@@ -696,14 +606,6 @@ void sd_storage_release_buffers(void)
         s_csv_buf_pos = 0;
         if (s_csv_fd >= 0) { close(s_csv_fd); s_csv_fd = -1; }
         xSemaphoreGive(s_csv_mutex);
-    }
-
-    if (s_dht11_mutex) {
-        xSemaphoreTake(s_dht11_mutex, portMAX_DELAY);
-        if (s_dht11_buf) { free(s_dht11_buf); s_dht11_buf = NULL; }
-        s_dht11_buf_pos = 0;
-        if (s_dht11_fd >= 0) { close(s_dht11_fd); s_dht11_fd = -1; }
-        xSemaphoreGive(s_dht11_mutex);
     }
 
     if (s_raw_fd >= 0) { close(s_raw_fd); s_raw_fd = -1; }

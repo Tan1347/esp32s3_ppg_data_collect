@@ -279,7 +279,7 @@ esp_err_t uart_recorder_start(const uart_recorder_config_t *config)
 
     /* Start tasks */
     xTaskCreate(uart_read_task, "uart_rd", STACK_PPG_TASK, NULL, 4, &s_uart_read_task);
-    xTaskCreate(file_write_task, "uart_wr", STACK_DHT11, NULL, 2, &s_file_write_task);
+    xTaskCreate(file_write_task, "uart_wr", STACK_UART_WR, NULL, 2, &s_file_write_task);
 
     ESP_LOGI(TAG, "UART2 recording started: %lu baud %d%c%d",
              (unsigned long)config->baud_rate,

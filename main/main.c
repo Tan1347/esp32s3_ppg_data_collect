@@ -4,7 +4,7 @@
  *
  * Architecture:
  * - Resident tasks: button1_task, sys_led_task (always running)
- * - Collection tasks: ppg_task, power_task, dht11_task (created on demand)
+ * - Collection tasks: ppg_task, power_task (created on demand)
  * - Main loop: lightweight state check, non-blocking
  *
  * State machine:
@@ -40,9 +40,6 @@
 #include "ppg_log.h"
 #include "ota_upgrade.h"
 #include "uart_recorder.h"
-#if DHT11_ENABLE
-#include "dht11.h"
-#endif
 #include "esp_wifi.h"
 #include "esp_http_client.h"
 #include "esp_task_wdt.h"
@@ -73,9 +70,6 @@ static volatile bool s_bad_signal = false;
 /* Collection task handles */
 static TaskHandle_t s_ppg_task_handle = NULL;
 static TaskHandle_t s_power_task_handle = NULL;
-#if DHT11_ENABLE
-static TaskHandle_t s_dht11_task_handle = NULL;
-#endif
 static TaskHandle_t s_button1_task_handle = NULL;
 
 /* PPG algorithm context (in BSS to avoid stack overflow) */
@@ -85,9 +79,6 @@ static ppg_algo_result_t s_algo_result;
 /* Forward declarations */
 static void ppg_task(void *arg);
 static void power_task(void *arg);
-#if DHT11_ENABLE
-static void dht11_task(void *arg);
-#endif
 static void button1_task(void *arg);
 static void sys_led_task(void *arg);
 static void request_deep_sleep(const char *reason);
@@ -192,21 +183,12 @@ static void start_collection_tasks(void)
     if (s_power_task_handle == NULL) {
         xTaskCreate(power_task, "power", STACK_POWER, NULL, 1, &s_power_task_handle);
     }
-#if DHT11_ENABLE
-    if (s_dht11_task_handle == NULL) {
-        xTaskCreate(dht11_task, "dht11", STACK_DHT11, NULL, 2, &s_dht11_task_handle);
-    }
-#endif
 }
 
 static void stop_collection_tasks(void)
 {
     /* Wait for tasks to exit (they check s_system_state and self-delete) */
-    TaskHandle_t handles[] = { s_ppg_task_handle, s_power_task_handle,
-#if DHT11_ENABLE
-                               s_dht11_task_handle
-#endif
-                             };
+    TaskHandle_t handles[] = { s_ppg_task_handle, s_power_task_handle };
     int num_handles = sizeof(handles) / sizeof(handles[0]);
     for (int i = 0; i < num_handles; i++) {
         if (handles[i] != NULL) {
@@ -219,9 +201,6 @@ static void stop_collection_tasks(void)
     }
     s_ppg_task_handle = NULL;
     s_power_task_handle = NULL;
-#if DHT11_ENABLE
-    s_dht11_task_handle = NULL;
-#endif
 }
 
 /* ========== System initialization ========== */
@@ -266,9 +245,6 @@ static esp_err_t system_init(void)
     }
 
     INIT_CHECK(max30102_init(), "MAX30102");
-#if DHT11_ENABLE
-    INIT_CHECK(dht11_init(), "DHT11");
-#endif
     INIT_CHECK(ota_upgrade_init(NULL), "OTA");
     INIT_CHECK(uart_recorder_init(), "UART recorder");
 
@@ -610,37 +586,6 @@ static void power_task(void *arg)
     vTaskDelete(NULL);
 }
 
-#if DHT11_ENABLE
-/**
- * @brief DHT11 temperature/humidity task
- */
-static void dht11_task(void *arg)
-{
-    puts("[DHT11] Task started");
-
-    dht11_data_t sensor_data;
-
-    while (s_system_state == STATE_MEASURING || s_system_state == STATE_STANDALONE) {
-        if (dht11_read(&sensor_data)) {
-            printf("DHT11: temp=%dC, humidity=%d%%\n",
-                   sensor_data.temperature, sensor_data.humidity);
-
-            if (sd_storage_is_mounted()) {
-                sd_storage_write_dht11(sensor_data.temperature, sensor_data.humidity);
-            }
-        } else {
-            puts("DHT11 read failed");
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(10000));
-    }
-
-    puts("[DHT11] Task ended");
-    s_dht11_task_handle = NULL;
-    vTaskDelete(NULL);
-}
-#endif /* DHT11_ENABLE */
-
 /* ========== BLE/WiFi modes ========== */
 
 /**
@@ -843,7 +788,9 @@ static void enter_deep_sleep(void)
     /* 3s cancel window (press BOOT to abort) */
     for (int i = 3; i > 0; i--) {
         printf("  %d...\n", i);
+        esp_task_wdt_reset();
         vTaskDelay(pdMS_TO_TICKS(1000));
+        esp_task_wdt_reset();
         if (gpio_get_level(MAX30102_INT_PIN) == 0) {
             puts("MAX30102 interrupt detected, cancel deep-sleep");
             s_system_state = STATE_STANDALONE;
@@ -885,15 +832,6 @@ static void handle_standalone_state(void)
     /* LED: 1s ON, 9s OFF (10s total cycle) for low power */
     s_led_on_ms = 1000;
     s_led_off_ms = 9000;
-
-#if DHT11_ENABLE
-    /* Stop DHT11 task (not needed in standalone, reduces wake-ups) */
-    if (s_dht11_task_handle != NULL) {
-        vTaskDelete(s_dht11_task_handle);
-        s_dht11_task_handle = NULL;
-        puts("DHT11 task stopped");
-    }
-#endif
 
     /* Stay awake 30s, then manual light-sleep */
     if (s_bad_signal) {
@@ -995,14 +933,6 @@ restore:
         xTaskCreate(button1_task, "button1", STACK_BUTTON1, NULL, 2, &s_button1_task_handle);
         puts("Button1 polling restarted");
     }
-
-#if DHT11_ENABLE
-    /* Recreate DHT11 task if it was deleted */
-    if (s_dht11_task_handle == NULL) {
-        xTaskCreate(dht11_task, "dht11", STACK_DHT11, NULL, 2, &s_dht11_task_handle);
-        puts("DHT11 task restarted");
-    }
-#endif
 
     power_mgmt_set_freq(PM_MAX_FREQ_MHZ);
     puts("Standalone done");

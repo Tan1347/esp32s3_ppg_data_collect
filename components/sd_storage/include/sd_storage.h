@@ -44,18 +44,6 @@ typedef struct __attribute__((packed)) {
     uint8_t  checksum;      /* XOR of all previous bytes */
 } ppg_result_record_t;
 
-/**
- * @brief DHT11 environment record (9 bytes)
- *
- * Stored in /env/ directory as binary file
- */
-typedef struct __attribute__((packed)) {
-    uint32_t timestamp;     /* Unix timestamp (seconds) */
-    int16_t  temperature;   /* Temperature (x10, e.g., 235 = 23.5C) */
-    int16_t  humidity;      /* Humidity (x10, e.g., 652 = 65.2%) */
-    uint8_t  checksum;      /* XOR of all previous bytes */
-} dht11_record_t;
-
 /* Checksum calculation */
 static inline uint8_t calc_checksum(const void *data, size_t len)
 {
@@ -125,14 +113,6 @@ esp_err_t sd_storage_write_raw(const max30102_sample_t *sample);
  * @return ESP_OK 成功
  */
 esp_err_t sd_storage_write_csv(const ppg_result_t *result);
-
-/**
- * @brief 写入 DHT11 温湿度数据
- * @param temperature 温度 (摄氏度)
- * @param humidity 湿度 (%)
- * @return ESP_OK 成功
- */
-esp_err_t sd_storage_write_dht11(int temperature, int humidity);
 
 /**
  * @brief 刷写所有缓冲数据到 TF 卡
