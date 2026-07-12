@@ -138,12 +138,17 @@ static const http_callbacks_t s_http_cbs = {
 
 static esp_err_t ensure_ble_init(void)
 {
-    if (s_ble_initialized) return ESP_OK;
+    if (s_ble_initialized) {
+        puts("[BLE] already initialized");
+        return ESP_OK;
+    }
     puts("BLE init (lazy)...");
     esp_err_t ret = ble_svc_init(&s_ble_cbs);
     if (ret == ESP_OK) {
         s_ble_initialized = true;
-        puts("BLE init done");
+        puts("[BLE] init done");
+    } else {
+        printf("[BLE] init FAILED: %s\n", esp_err_to_name(ret));
     }
     return ret;
 }
@@ -634,9 +639,11 @@ static void enter_ble_pairing(void)
     stop_collection_tasks();
 
     if (ensure_ble_init() != ESP_OK) {
+        puts("[BLE] init failed, entering deep-sleep");
         request_deep_sleep("BLE init failed");
         return;
     }
+    puts("[BLE] init OK, waiting for NimBLE sync...");
 
     bool is_wakeup = is_gpio_wakeup();
     int timeout_sec = is_wakeup ? (TIMEOUT_BLE_PAIR_WAKEUP / 1000) : (TIMEOUT_BLE_PAIR_COLDBOOT / 1000);
@@ -644,30 +651,36 @@ static void enter_ble_pairing(void)
     /* Wait for NimBLE to sync before starting advertising */
     int wait_ms = 0;
     while (!ble_svc_is_nimble_synced() && wait_ms < 5000) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-        wait_ms += 100;
+        vTaskDelay(pdMS_TO_TICKS(200));
+        wait_ms += 200;
+        if (wait_ms % 1000 == 0) {
+            printf("[BLE] sync wait %d/5000ms\n", wait_ms);
+        }
     }
 
     if (!ble_svc_is_nimble_synced()) {
-        puts("BLE NimBLE sync timeout");
+        puts("[BLE] NimBLE sync TIMEOUT");
         request_deep_sleep("BLE sync failed");
         return;
     }
 
+    printf("[BLE] NimBLE synced in %dms, starting advertising...\n", wait_ms);
+
     esp_err_t ret = ble_svc_start_advertising();
     if (ret != ESP_OK) {
-        printf("[BLE] Advertising start failed: %s\n", esp_err_to_name(ret));
+        printf("[BLE] Advertising start FAILED: %s\n", esp_err_to_name(ret));
         request_deep_sleep("BLE adv failed");
         return;
     }
-    puts("BLE advertising started");
+    puts("[BLE] Advertising STARTED, waiting for phone...");
 
     bool connected = poll_until(ble_svc_is_connected, timeout_sec, "BLE connect");
 
     if (connected) {
-        puts("BLE connected");
+        puts("[BLE] Connected, entering command mode");
         system_set_state(STATE_BLE_CONNECTED);
     } else {
+        puts("[BLE] Connection timeout");
         request_deep_sleep("BLE timeout");
     }
 }

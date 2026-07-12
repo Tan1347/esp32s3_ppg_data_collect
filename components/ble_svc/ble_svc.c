@@ -742,16 +742,22 @@ static int gap_event(struct ble_gap_event *event, void *arg)
 
 static void ble_on_sync(void)
 {
-    ESP_LOGI(TAG, "NimBLE synced");
+    printf("[BLE] NimBLE synced (host task)\n");
     s_nimble_synced = true;
 
     int ret = ble_hs_util_ensure_addr(0);
     if (ret != 0) {
-        ESP_LOGE(TAG, "Set addr failed: %d", ret);
+        printf("[BLE] Set addr FAILED: %d\n", ret);
         return;
     }
+    printf("[BLE] Address configured OK\n");
 
-    ble_svc_start_advertising();
+    ret = ble_svc_start_advertising();
+    if (ret == ESP_OK) {
+        printf("[BLE] Advertising started from sync callback\n");
+    } else {
+        printf("[BLE] Advertising from sync callback: %s\n", esp_err_to_name(ret));
+    }
 }
 
 static void ble_on_reset(int reason)
@@ -822,7 +828,7 @@ esp_err_t ble_svc_init(const ble_callbacks_t *callbacks)
     /* 启动 NimBLE 主机任务 */
     nimble_port_freertos_init(ble_host_task);
 
-    ESP_LOGI(TAG, "BLE service init done (%s)", BLE_DEVICE_NAME);
+    printf("[BLE] service init done (name=%s)\n", BLE_DEVICE_NAME);
     return ESP_OK;
 }
 
@@ -864,6 +870,7 @@ esp_err_t ble_svc_start_advertising(void)
     }
 
     ESP_LOGI(TAG, "BLE advertising started");
+    printf("[BLE] Advertising: name=%s adv_handle OK\n", BLE_DEVICE_NAME);
     BLE_DEBUG_LOG("Advertising started: name=%s interval=%d-%dms",
                   BLE_DEVICE_NAME, 160, 220);
     return ESP_OK;
