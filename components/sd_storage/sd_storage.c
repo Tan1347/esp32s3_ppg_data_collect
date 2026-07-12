@@ -101,7 +101,7 @@ static void generate_csv_filename(char *buf, size_t len)
 
 static esp_err_t ensure_directories(void)
 {
-    const char *dirs[] = {"/raw", "/csv", "/log", "/env"};
+    const char *dirs[] = {"/raw", "/csv", "/log", "/uart0"};
     for (int i = 0; i < 4; i++) {
         char path[32];
         snprintf(path, sizeof(path), "%s%s", MOUNT_POINT, dirs[i]);
@@ -185,23 +185,16 @@ static size_t buffer_write(buffer_t *buf, const void *data, size_t len)
 }
 
 /**
- * @brief 切换主备缓冲区
+ * @brief 切换主备缓冲区 (caller must hold s_buf_mutex)
  */
-static buffer_t* switch_buffer(void)
+static buffer_t* switch_buffer_nolock(void)
 {
-    buffer_t *new_active = NULL;
-
-    if (xSemaphoreTake(s_buf_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        if (s_active_buf == &s_primary_buf) {
-            s_active_buf = &s_backup_buf;
-        } else {
-            s_active_buf = &s_primary_buf;
-        }
-        new_active = s_active_buf;
-        xSemaphoreGive(s_buf_mutex);
+    if (s_active_buf == &s_primary_buf) {
+        s_active_buf = &s_backup_buf;
+    } else {
+        s_active_buf = &s_primary_buf;
     }
-
-    return new_active;
+    return s_active_buf;
 }
 
 /**
@@ -441,7 +434,7 @@ esp_err_t sd_storage_write_raw(const sd_raw_record_t *sample)
     if (written < sizeof(record)) {
         /* Primary buffer full, switch to backup */
         ESP_LOGI(TAG, "Primary buffer full, switching to backup");
-        buffer_t *new_buf = switch_buffer();
+        buffer_t *new_buf = switch_buffer_nolock();
         if (new_buf) {
             /* Write remaining data to new buffer */
             size_t remaining = sizeof(record) - written;
@@ -540,9 +533,9 @@ esp_err_t sd_storage_get_file_list(char *buf, size_t len)
 
     int pos = snprintf(buf, len, "{\"files\":[");
 
-    /* 扫描 /raw/ /csv/ /log/ 目录 */
-    const char *dirs[] = {"raw", "csv", "log"};
-    for (int d = 0; d < 3; d++) {
+    /* 扫描 /raw/ /csv/ /log/ /uart0/ 目录 */
+    const char *dirs[] = {"raw", "csv", "log", "uart0"};
+    for (int d = 0; d < 4; d++) {
         char path[32];
         snprintf(path, sizeof(path), "%s/%s", MOUNT_POINT, dirs[d]);
         DIR *dir = opendir(path);

@@ -418,7 +418,7 @@ static esp_err_t api_system_info_handler(httpd_req_t *req)
         "{\"firmware_version\":\"%s\","
         "\"build_time\":\"%s\","
         "\"uptime_seconds\":%d,"
-        "\"chip_model\":\"ESP32-C3\","
+        "\"chip_model\":\"ESP32-S3\","
         "\"cpu_freq_mhz\":%d}",
         PPG_FW_VERSION,
         PPG_FW_BUILD_TS,

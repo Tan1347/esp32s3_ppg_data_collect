@@ -252,9 +252,9 @@ static esp_err_t system_init(void)
         uint32_t total_mb = sd_storage_get_total_space_mb();
         uint32_t free_mb = sd_storage_get_free_space_mb();
         uint32_t used_mb = total_mb - free_mb;
+        unsigned long pct = total_mb > 0 ? (used_mb * 100 / total_mb) : 0;
         printf("[INIT] TF card mounted: %luMB used / %luMB total (%lu%% used)\n",
-               (unsigned long)used_mb, (unsigned long)total_mb,
-               (unsigned long)(used_mb * 100 / total_mb));
+               (unsigned long)used_mb, (unsigned long)total_mb, pct);
     } else {
         puts("[INIT] TF card not available");
     }
@@ -1127,14 +1127,14 @@ void app_main(void)
     if (level == 0) {
         /* Button pressed at boot, enter BLE pairing */
         puts("BUTTON1 pressed at boot -> BLE pairing");
-        s_system_state = STATE_BLE_PAIRING;
+        system_set_state(STATE_BLE_PAIRING);
     } else if (gpio_wakeup) {
         puts("GPIO wake -> standalone");
-        s_system_state = STATE_STANDALONE;
+        system_set_state(STATE_STANDALONE);
     } else {
         /* Cold boot: RF off by default, standalone collection only */
         puts("Cold boot -> standalone (RF off)");
-        s_system_state = STATE_STANDALONE;
+        system_set_state(STATE_STANDALONE);
     }
 
     /* Enter main loop */
