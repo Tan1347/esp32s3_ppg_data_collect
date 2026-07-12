@@ -529,7 +529,12 @@ static void ppg_task(void *arg)
 #endif
 
             /* Check data validity (perfusion ratio) */
-            if (!s_algo_result.hr_valid && !s_algo_result.spo2_valid) {
+            bool data_valid = s_algo_result.hr_valid || s_algo_result.spo2_valid;
+#if PPG_DEBUG_ENABLE
+            /* Also reject if IR amplitude too low (no finger) */
+            if (s_algo_result.ir_amplitude < 500) data_valid = false;
+#endif
+            if (!data_valid) {
                 invalid_sec += 5;  /* Algorithm processes every 5s */
                 printf("[PPG] Invalid data, %ds/%ds\n", invalid_sec, BAD_SIGNAL_TIMEOUT_SEC);
                 if (invalid_sec >= BAD_SIGNAL_TIMEOUT_SEC) {
