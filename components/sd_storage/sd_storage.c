@@ -471,25 +471,35 @@ esp_err_t sd_storage_write_csv(const ppg_result_t *result)
             xSemaphoreGive(s_csv_mutex);
             return ESP_ERR_NOT_FOUND;
         }
+        /* Write CSV header if file is empty */
+        if (lseek(s_csv_fd, 0, SEEK_END) == 0) {
+            const char *header = "timestamp,heart_rate,spo2,hr_valid,spo2_valid\n";
+            size_t hlen = strlen(header);
+            if (s_csv_buf_pos + hlen <= CSV_BUF_SIZE) {
+                memcpy(s_csv_buf + s_csv_buf_pos, header, hlen);
+                s_csv_buf_pos += hlen;
+            }
+        }
     }
 
-    /* Prepare binary record */
-    ppg_result_record_t record;
-    record.timestamp = (uint32_t)time(NULL);
-    record.heart_rate = result->heart_rate;
-    record.spo2 = result->spo2;
-    record.hr_valid = result->hr_valid;
-    record.spo2_valid = result->spo2_valid;
-    record.checksum = calc_checksum(&record, sizeof(record));
+    /* Prepare text CSV line: timestamp,heart_rate,spo2,hr_valid,spo2_valid\n */
+    uint32_t ts = (uint32_t)time(NULL);
+    char line[64];
+    int len = snprintf(line, sizeof(line), "%lu,%ld,%ld,%d,%d\n",
+                       (unsigned long)ts,
+                       (long)result->heart_rate,
+                       (long)result->spo2,
+                       result->hr_valid ? 1 : 0,
+                       result->spo2_valid ? 1 : 0);
 
     /* Write to buffer */
-    if (s_csv_buf_pos + sizeof(record) > CSV_BUF_SIZE) {
+    if (s_csv_buf_pos + len > CSV_BUF_SIZE) {
         safe_write(s_csv_fd, s_csv_buf, s_csv_buf_pos);
         s_csv_buf_pos = 0;
     }
 
-    memcpy(s_csv_buf + s_csv_buf_pos, &record, sizeof(record));
-    s_csv_buf_pos += sizeof(record);
+    memcpy(s_csv_buf + s_csv_buf_pos, line, len);
+    s_csv_buf_pos += len;
 
     xSemaphoreGive(s_csv_mutex);
     return ESP_OK;
