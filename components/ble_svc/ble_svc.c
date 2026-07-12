@@ -412,8 +412,8 @@ static void cmd_query_status(uint8_t cmd, const uint8_t *data, uint8_t len)
     uint8_t batt_pct = s_cbs->voltage_to_soc(voltage);
     ble_svc_update_status(batt_pct, voltage);
 
-    printf("[BLE] cmd_query_status: batt=%d%% voltage=%lumV connected=%d\n",
-           batt_pct, (unsigned long)voltage, s_connected);
+    printf("[BLE] cmd_query_status: batt=%d%% voltage=%lu.%02luV connected=%d\n",
+           batt_pct, (unsigned long)(voltage / 100), (unsigned long)(voltage % 100), s_connected);
     printf("[BLE] Status data: ");
     for (int i = 0; i < 20; i++) printf("%02X ", s_status_data[i]);
     printf("\n");
@@ -456,8 +456,8 @@ static void cmd_query_battery(uint8_t cmd, const uint8_t *data, uint8_t len)
     (void)data; (void)len;
     uint32_t voltage = s_cbs->get_voltage();
     uint8_t batt_pct = s_cbs->voltage_to_soc(voltage);
-    printf("[BLE] cmd_query_battery: batt=%d%% voltage=%lumV connected=%d\n",
-           batt_pct, (unsigned long)voltage, s_connected);
+    printf("[BLE] cmd_query_battery: batt=%d%% voltage=%lu.%02luV connected=%d\n",
+           batt_pct, (unsigned long)(voltage / 100), (unsigned long)(voltage % 100), s_connected);
     uint8_t resp[1] = { batt_pct };
     printf("[BLE] Battery resp data: %02X\n", resp[0]);
     ble_send_data_response(cmd, resp, 1);
@@ -906,8 +906,8 @@ esp_err_t ble_svc_update_status(uint8_t batt_pct, uint32_t battery_voltage)
     s_status_data[4] = s_connected ? 1 : 0;
     strncpy((char *)&s_status_data[5], PPG_FW_VERSION, 15);
 
-    printf("[BLE] Status: batt_pct=%d%% voltage=%lumV version=%s\n",
-           batt_pct, (unsigned long)battery_voltage, PPG_FW_VERSION);
+    printf("[BLE] Status: batt_pct=%d%% voltage=%lu.%02luV version=%s\n",
+           batt_pct, (unsigned long)(battery_voltage / 100), (unsigned long)(battery_voltage % 100), PPG_FW_VERSION);
 
     return ESP_OK;
 }
