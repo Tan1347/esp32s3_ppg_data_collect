@@ -894,6 +894,11 @@ static void handle_standalone_state(void)
     /* Stop all collection tasks — they access SD card which is unsafe during light-sleep */
     stop_collection_tasks();
 
+    /* Flush SD buffers before sleep — otherwise unflushed data is lost */
+    esp_task_wdt_reset();
+    sd_storage_flush();
+    puts("SD buffers flushed");
+
     /* Stop button polling for low power (keep alive during 30s for mode switch) */
     esp_task_wdt_reset();
     if (s_button1_task_handle != NULL) {
