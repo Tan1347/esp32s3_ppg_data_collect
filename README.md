@@ -19,8 +19,8 @@
 | PPG 算法 | 纯定点运算，5 秒滑动窗口，峰值检测 + Hamming 滤波 |
 | BLE | NimBLE 协议栈，帧协议通信（0xAA 帧头 + SUM 校验） |
 | WiFi | Station 模式，HTTP Server，文件传输 + Web 管理 + OTA |
-| TF 卡 | FAT32 + LZ4 压缩，主备缓冲 (16KB+4KB)，SPI 400kHz→20MHz |
-| UART 录制 | 双缓冲 DMA (2x32KB)，支持 9600~5Mbps 波特率 |
+| TF 卡 | FAT32 + LZ4 压缩，主备缓冲 (32KB+8KB)，SPI 400kHz→20MHz |
+| UART 录制 | 双缓冲 (2x16KB)，支持 9600~5Mbps 波特率 |
 | DHT11 | 温湿度监测，二进制格式存储 |
 | OTA | 双分区 A/B，SHA-256 校验，60 秒启动自检，失败自动回滚 |
 | 电源 | DFS 动态调频，Auto Light-sleep，Deep-sleep，电池电量保护（可禁用） |
@@ -355,7 +355,7 @@ WiFi 连接后通过局域网 IP 访问。
 
 | 任务 | 优先级 | 栈大小 | 说明 |
 |------|--------|--------|------|
-| sys_led_task | 1 | 3KB | GPIO10 系统心跳灯 |
+| sys_led_task | 1 | 2KB | GPIO10 系统心跳灯 + WDT 喂狗 |
 | ppg_led_task | 1 | 2KB | GPIO11 PPG 状态灯 |
 | button1_task | 2 | 2KB | BUTTON1 按钮检测 |
 

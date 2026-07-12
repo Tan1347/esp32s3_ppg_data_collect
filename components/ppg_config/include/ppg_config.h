@@ -113,7 +113,7 @@ typedef enum {
 #define WIFI_HTTP_TIMEOUT_SEC   120
 
 /* ==================== Log System ==================== */
-#define LOG_RING_BUFFER_SIZE    (4 * 1024)
+#define LOG_RING_BUFFER_SIZE    (8 * 1024)  /* 8KB ring buffer (S3 has PSRAM) */
 #define LOG_FLUSH_THRESHOLD     (LOG_RING_BUFFER_SIZE / 2)
 #define LOG_FLUSH_INTERVAL_MS   30000
 #define LOG_MAX_FILE_SIZE       (10 * 1024 * 1024)
@@ -126,7 +126,7 @@ typedef enum {
 /* ==================== Power Management ==================== */
 #define PM_MAX_FREQ_MHZ         240   /* S3 supports up to 240MHz */
 #define PM_MIN_FREQ_MHZ         10
-#define PM_LIGHT_SLEEP_ENABLE   true
+#define PM_LIGHT_SLEEP_ENABLE   false  /* Auto light-sleep disabled (tick conflict on S3) */
 
 /* ==================== OTA ==================== */
 #define OTA_BUFFER_SIZE         4096
@@ -135,7 +135,7 @@ typedef enum {
 /* ==================== Task Stack Sizes ==================== */
 #define STACK_PPG_TASK          4096
 #define STACK_BLE_CMD           4096
-#define STACK_SYS_LED           3072
+#define STACK_SYS_LED           2048  /* Reduced: simple LED toggle + WDT feed */
 #define STACK_PPG_LED           2048
 #define STACK_BUTTON1           2048
 #define STACK_POWER             2048
@@ -149,7 +149,7 @@ typedef enum {
 #define TIMEOUT_WIFI_IDLE           60000
 #define TIMEOUT_STANDBY_AWAKE       30000
 #define TIMEOUT_DEEP_SLEEP_NO_INT   300000
-#define TIMEOUT_WDT                 5000
+#define TIMEOUT_WDT                 10000  /* 10s: enough for 1s LED toggle + margin */
 #define TIMEOUT_BUTTON_LONG_PRESS   3000
 #define TIMEOUT_BLE_CMD_DELAY       500
 

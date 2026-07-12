@@ -69,9 +69,21 @@ esp_err_t power_mgmt_set_freq(uint32_t freq_mhz)
         return ESP_ERR_NOT_SUPPORTED;
     }
 
-    /* DFS 模式下由系统自动管理, 此函数仅用于手动覆盖 */
-    ESP_LOGI(TAG, "Freq request: %d MHz (DFS auto)", freq_mhz);
-    return ESP_OK;
+    /* Clamp to valid range */
+    if (freq_mhz < PM_MIN_FREQ_MHZ) freq_mhz = PM_MIN_FREQ_MHZ;
+    if (freq_mhz > PM_MAX_FREQ_MHZ) freq_mhz = PM_MAX_FREQ_MHZ;
+
+    /* Set both min and max to fixed frequency (disable auto-scaling) */
+    esp_pm_config_t pm_config = {
+        .max_freq_mhz = freq_mhz,
+        .min_freq_mhz = freq_mhz,
+        .light_sleep_enable = PM_LIGHT_SLEEP_ENABLE,
+    };
+    esp_err_t ret = esp_pm_configure(&pm_config);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Freq set: %d MHz", freq_mhz);
+    }
+    return ret;
 }
 
 esp_err_t power_mgmt_set_dfs(bool enable)

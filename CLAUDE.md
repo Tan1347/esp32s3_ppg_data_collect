@@ -11,6 +11,7 @@ Xtensa LX7 双核处理器，240MHz，16MB Flash，8MB PSRAM。
 2. **Deep-sleep 唤醒**: 使用 GPIO12 (MAX30102_INT)，S3 支持任意 RTC GPIO 唤醒
 3. **代码必须英文**: 所有日志、注释、变量名必须使用英文
 4. **Bootloader UART**: 使用 `CONFIG_ESP_CONSOLE_UART_CUSTOM` 模式，否则波特率配置会被忽略
+5. **CodeGraph 优先**: 项目有 `.codegraph/` 索引，查找函数定义、调用关系、源码时优先使用 `codegraph_codegraph_explore`，减少 grep/read 开销
 
 ## 栈溢出约束
 

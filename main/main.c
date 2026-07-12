@@ -49,6 +49,7 @@
 /* System state (protected by spinlock for thread safety) */
 static system_state_t s_system_state = STATE_STANDALONE;
 static portMUX_TYPE s_state_mux = portMUX_INITIALIZER_UNLOCKED;
+static const char *s_sleep_reason = "";  /* Deep-sleep reason for logging */
 
 /* Event group */
 static EventGroupHandle_t s_system_event_group;
@@ -68,6 +69,7 @@ static volatile bool s_ppg_collecting = false;
 static TaskHandle_t s_ppg_task_handle = NULL;
 static TaskHandle_t s_power_task_handle = NULL;
 static TaskHandle_t s_dht11_task_handle = NULL;
+static TaskHandle_t s_button1_task_handle = NULL;
 
 /* PPG algorithm context (in BSS to avoid stack overflow) */
 static ppg_algo_ctx_t s_algo_ctx;
@@ -80,6 +82,10 @@ static void power_task(void *arg);
 static void dht11_task(void *arg);
 static void button1_task(void *arg);
 static void sys_led_task(void *arg);
+static void request_deep_sleep(const char *reason);
+
+/* LED control flag (true = LED task runs, false = LED forced off) */
+static volatile bool s_led_active = true;
 
 /* ========== Lazy initialization ========== */
 
@@ -245,17 +251,17 @@ static esp_err_t system_init(void)
     INIT_CHECK(ota_upgrade_init(NULL), "OTA");
     INIT_CHECK(uart_recorder_init(), "UART recorder");
 
-    /* Enable Auto Light-sleep: reduce idle power from ~21mA to ~1mA */
+    /* DFS enabled, but auto light-sleep disabled (tick conflict on S3) */
     esp_pm_config_t pm_config = {
         .max_freq_mhz = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ,
         .min_freq_mhz = 10,
-        .light_sleep_enable = true,
+        .light_sleep_enable = PM_LIGHT_SLEEP_ENABLE,  /* false */
     };
     esp_err_t pm_ret = esp_pm_configure(&pm_config);
     if (pm_ret == ESP_OK) {
-        puts("[INIT] Auto Light-sleep enabled");
+        puts("[INIT] DFS enabled (10-240MHz), manual light-sleep");
     } else {
-        printf("[INIT] Auto Light-sleep failed: %s\n", esp_err_to_name(pm_ret));
+        printf("[INIT] DFS failed: %s\n", esp_err_to_name(pm_ret));
     }
 
     if (ota_upgrade_pending_confirm()) {
@@ -274,32 +280,45 @@ static esp_err_t system_init(void)
     }
 
     puts("[INIT] System init done");
+
+    /* Shutdown MAX30102 to save power until collection starts */
+    max30102_stop();
+    puts("[INIT] MAX30102 shutdown (power save)");
+
     return ESP_OK;
 }
 
 /* ========== Resident tasks ========== */
 
 /**
- * @brief System status LED task (GPIO13)
- * Toggle every 1 second, feed watchdog, print heap info
+ * @brief System status LED task (GPIO10)
+ * Blink pattern: ON for s_led_on_ms, OFF for s_led_off_ms
  */
+static volatile int s_led_on_ms = 500;
+static volatile int s_led_off_ms = 500;
+
 static void sys_led_task(void *arg)
 {
     bool wdt_ok = (esp_task_wdt_add(NULL) == ESP_OK);
 
     while (1) {
-        gpio_set_level(SYS_LED_PIN, 1);
-        vTaskDelay(pdMS_TO_TICKS(500));
-        gpio_set_level(SYS_LED_PIN, 0);
-        vTaskDelay(pdMS_TO_TICKS(500));
-        if (wdt_ok) esp_task_wdt_reset();
-
-        /* Print heap info every 1 second for leak detection */
-        uint32_t free_heap = esp_get_free_heap_size();
-        uint32_t min_heap = esp_get_minimum_free_heap_size();
-        printf("[SYS] free_heap=%luKB min_heap=%luKB\n",
-               (unsigned long)(free_heap / 1024),
-               (unsigned long)(min_heap / 1024));
+        if (s_led_active) {
+            gpio_set_level(SYS_LED_PIN, 1);
+            /* Feed WDT in small chunks during long sleep */
+            for (int i = 0; i < s_led_on_ms / 1000; i++) {
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                if (wdt_ok) esp_task_wdt_reset();
+            }
+            gpio_set_level(SYS_LED_PIN, 0);
+            for (int i = 0; i < s_led_off_ms / 1000; i++) {
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                if (wdt_ok) esp_task_wdt_reset();
+            }
+        } else {
+            gpio_set_level(SYS_LED_PIN, 0);
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            if (wdt_ok) esp_task_wdt_reset();
+        }
     }
 }
 
@@ -420,6 +439,9 @@ static void ppg_task(void *arg)
 {
     puts("[PPG] Task started");
 
+    /* High frequency for PPG data processing */
+    power_mgmt_set_freq(PM_MAX_FREQ_MHZ);
+
     ppg_algo_init(&s_algo_ctx);
     max30102_start();
     s_ppg_collecting = true;
@@ -475,6 +497,9 @@ static void ppg_task(void *arg)
     max30102_stop();
     s_ppg_collecting = false;
 
+    /* Low frequency after PPG collection ends */
+    power_mgmt_set_freq(PM_MIN_FREQ_MHZ);
+
     puts("[PPG] Task ended");
     s_ppg_task_handle = NULL;
     xEventGroupSetBits(s_system_event_group, EVT_MEASURING_DONE);
@@ -492,13 +517,16 @@ static void power_task(void *arg)
 
     while (s_system_state == STATE_MEASURING || s_system_state == STATE_STANDALONE) {
         uint32_t free_heap = esp_get_free_heap_size();
+        uint32_t min_heap = esp_get_minimum_free_heap_size();
         size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-        printf("free_heap %luKB, free_psram %luKB\n",
-               (unsigned long)(free_heap / 1024),
-               (unsigned long)(free_psram / 1024));
-
         uint32_t voltage = battery_get_voltage();
         uint8_t batt_pct = battery_voltage_to_soc(voltage);
+        printf("free_heap %luKB (min %luKB), free_psram %luKB, batt %lu.%02luV %d%%\n",
+               (unsigned long)(free_heap / 1024),
+               (unsigned long)(min_heap / 1024),
+               (unsigned long)(free_psram / 1024),
+               (unsigned long)(voltage / 100), (unsigned long)(voltage % 100),
+               batt_pct);
 
         ble_svc_update_status(batt_pct, voltage);
 
@@ -509,8 +537,7 @@ static void power_task(void *arg)
             printf("[POWER] Battery low (%lu.%02luV), count=%d/3\n",
                    (unsigned long)(voltage / 100), (unsigned long)(voltage % 100), low_voltage_count);
             if (low_voltage_count >= 3) {
-                puts("[POWER] Battery low confirmed, shutting down");
-                s_system_state = STATE_DEEP_SLEEP;
+                request_deep_sleep("battery low");
                 xEventGroupSetBits(s_system_event_group, EVT_SHUTDOWN);
                 break;
             }
@@ -578,8 +605,7 @@ static bool poll_until(bool (*cond)(void), int timeout_sec, const char *label)
 static void enter_ble_pairing(void)
 {
     if (ensure_ble_init() != ESP_OK) {
-        puts("BLE init failed, back to sleep");
-        s_system_state = STATE_DEEP_SLEEP;
+        request_deep_sleep("BLE init failed");
         return;
     }
 
@@ -595,10 +621,7 @@ static void enter_ble_pairing(void)
         puts("BLE connected");
         s_system_state = STATE_BLE_CONNECTED;
     } else {
-        puts("BLE timeout, entering Deep-sleep");
-        ble_svc_stop_advertising();
-        puts("BLE advertising stopped");
-        s_system_state = STATE_DEEP_SLEEP;
+        request_deep_sleep("BLE timeout");
     }
 }
 
@@ -613,8 +636,7 @@ static void enter_wifi_mode(void)
            (unsigned long)(esp_get_free_heap_size() / 1024));
 
     if (ensure_wifi_init() != ESP_OK) {
-        puts("WiFi init failed, back to sleep");
-        s_system_state = STATE_DEEP_SLEEP;
+        request_deep_sleep("WiFi init failed");
         return;
     }
 
@@ -622,15 +644,14 @@ static void enter_wifi_mode(void)
     uint8_t batt_pct = battery_voltage_to_soc(battery_get_voltage());
     if (batt_pct < BATTERY_WIFI_MIN_SOC) {
         printf("Battery low (%d%%), WiFi disabled\n", batt_pct);
-        s_system_state = STATE_DEEP_SLEEP;
+        request_deep_sleep("battery low for WiFi");
         return;
     }
 #endif
 
     esp_err_t ret = wifi_prov_auto_connect();
     if (ret != ESP_OK) {
-        puts("WiFi start failed");
-        s_system_state = STATE_DEEP_SLEEP;
+        request_deep_sleep("WiFi start failed");
         return;
     }
 
@@ -638,9 +659,7 @@ static void enter_wifi_mode(void)
     bool connected = poll_until(wifi_prov_is_connected, (TIMEOUT_WIFI_CONNECT / 1000), "WiFi connect");
 
     if (!connected) {
-        esp_wifi_stop();
-        puts("WiFi stopped");
-        s_system_state = STATE_DEEP_SLEEP;
+        request_deep_sleep("WiFi connect timeout");
         return;
     }
 
@@ -701,37 +720,68 @@ static void enter_wifi_mode(void)
     }
 
     /* Close WiFi */
-    puts("WiFi timeout (60s), closing");
-    wifi_transfer_stop();
-    esp_wifi_stop();
-    puts("WiFi stopped");
-    s_system_state = STATE_DEEP_SLEEP;
+    request_deep_sleep("WiFi idle timeout");
 }
 
 /* ========== Deep sleep ========== */
 
+/**
+ * @brief Request deep-sleep with given reason
+ * Sets state and logs reason. Actual sleep happens in enter_deep_sleep().
+ */
+static void request_deep_sleep(const char *reason)
+{
+    printf("[SLEEP] Requesting deep-sleep: %s\n", reason);
+    s_sleep_reason = reason;
+    s_system_state = STATE_DEEP_SLEEP;
+}
+
+/**
+ * @brief Unified deep-sleep entry with full resource cleanup
+ * Called from main_loop when s_system_state == STATE_DEEP_SLEEP
+ */
 static void enter_deep_sleep(void)
 {
-    puts("Entering Deep-sleep in 3s (press BOOT to cancel)...");
+    printf("Entering Deep-sleep: %s (press BOOT to cancel in 3s)\n", s_sleep_reason);
 
-    max30102_stop();
-    ppg_log_flush();
+    /* Low frequency before sleep */
+    power_mgmt_set_freq(PM_MIN_FREQ_MHZ);
 
-    if (sd_storage_is_mounted()) {
-        puts("Flushing TF card data...");
-        sd_storage_flush();
-        sd_storage_unmount();
-        puts("TF card data saved");
+    /* Stop BLE */
+    if (s_ble_initialized) {
+        ble_svc_stop_advertising();
+        puts("[SLEEP] BLE stopped");
     }
 
-    /* Release SPI bus to reduce leakage current during deep sleep */
-    /* (SPI pins with internal pull-up/down can leak ~2.3uA if floating) */
+    /* Stop WiFi */
+    if (s_wifi_initialized) {
+        wifi_transfer_stop();
+        esp_wifi_stop();
+        puts("[SLEEP] WiFi stopped");
+    }
+
+    /* Stop sensors */
+    max30102_stop();
+
+    /* Flush logs */
+    ppg_log_flush();
+
+    /* Flush and unmount SD card */
+    if (sd_storage_is_mounted()) {
+        puts("[SLEEP] Flushing TF card...");
+        sd_storage_flush();
+        sd_storage_unmount();
+        puts("[SLEEP] TF card saved");
+    }
+
+    /* Release SPI bus to reduce leakage current */
     spi_bus_free(SD_SPI_HOST);
     gpio_set_direction(SD_SPI_CLK_PIN, GPIO_MODE_DISABLE);
     gpio_set_direction(SD_SPI_MOSI_PIN, GPIO_MODE_DISABLE);
     gpio_set_direction(SD_SPI_MISO_PIN, GPIO_MODE_DISABLE);
     gpio_set_direction(SD_SPI_CS_PIN, GPIO_MODE_DISABLE);
 
+    /* 3s cancel window (press BOOT to abort) */
     for (int i = 3; i > 0; i--) {
         printf("  %d...\n", i);
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -742,22 +792,19 @@ static void enter_deep_sleep(void)
         }
     }
 
-    /* Release GPIO hold (ESP32-C3 holds RTC GPIO 0-5 low during deep sleep) */
+    /* Configure wake sources */
     gpio_deep_sleep_hold_dis();
-
-    /* Configure wake pins as input with pull-up */
     gpio_set_direction(MAX30102_INT_PIN, GPIO_MODE_INPUT);
     gpio_set_pull_mode(MAX30102_INT_PIN, GPIO_PULLUP_ONLY);
-
     gpio_set_direction(BUTTON1_GPIO, GPIO_MODE_INPUT);
-    gpio_set_pull_mode(BUTTON1_GPIO, GPIO_PULLUP_ONLY);  /* Internal pull-up, no external resistor needed */
+    gpio_set_pull_mode(BUTTON1_GPIO, GPIO_PULLUP_ONLY);
 
-    /* Wake sources: MAX30102 INT (GPIO12) or BUTTON1 (GPIO18), active low */
     esp_sleep_enable_ext1_wakeup_io(
         (1ULL << MAX30102_INT_PIN) | (1ULL << BUTTON1_GPIO),
         ESP_EXT1_WAKEUP_ANY_LOW);
-    printf("Deep-sleep wake: GPIO%d (MAX30102) + GPIO%d (BUTTON1)\n",
+    printf("[SLEEP] Wake: GPIO%d (MAX30102) + GPIO%d (BUTTON1)\n",
            MAX30102_INT_PIN, BUTTON1_GPIO);
+
     power_mgmt_enter_deep_sleep();
 }
 
@@ -776,7 +823,25 @@ static void handle_standalone_state(void)
     }
     start_collection_tasks();
 
-    /* Stay awake 30s, then enter light-sleep */
+    /* LED: 1s ON, 9s OFF (10s total cycle) for low power */
+    s_led_on_ms = 1000;
+    s_led_off_ms = 9000;
+
+    /* Stop button polling for low power */
+    if (s_button1_task_handle != NULL) {
+        vTaskDelete(s_button1_task_handle);
+        s_button1_task_handle = NULL;
+        puts("Button1 polling stopped");
+    }
+
+    /* Stop DHT11 task (not needed in standalone, reduces wake-ups) */
+    if (s_dht11_task_handle != NULL) {
+        vTaskDelete(s_dht11_task_handle);
+        s_dht11_task_handle = NULL;
+        puts("DHT11 task stopped");
+    }
+
+    /* Stay awake 30s, then manual light-sleep */
     puts("Staying awake for 30s...");
     for (int i = TIMEOUT_STANDBY_AWAKE / 1000; i > 0; i--) {
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -784,29 +849,70 @@ static void handle_standalone_state(void)
         if (i % 10 == 0) {
             printf("  %ds remaining...\n", i);
         }
-        if (s_system_state != STATE_STANDALONE) return;
+        if (s_system_state != STATE_STANDALONE) goto restore;
     }
-    puts("30s elapsed, entering Light-sleep...");
+    puts("30s elapsed, entering manual Light-sleep...");
 
-    /* Light-sleep loop, check MAX30102 interrupt */
+    /* Turn off LEDs and disable LED task */
+    s_led_active = false;
+    gpio_set_level(SYS_LED_PIN, 0);
+    gpio_set_level(PPG_LED_PIN, 0);
+
+    /* Shutdown MAX30102 to save power during light-sleep */
+    max30102_stop();
+    puts("MAX30102 shutdown, LEDs off for light-sleep");
+
+    /* Manual light-sleep loop: 1s timer wake, check button1 */
     int64_t last_interrupt_time = esp_timer_get_time();
     while (s_system_state == STATE_STANDALONE) {
         esp_task_wdt_reset();
 
+        /* Check for button1 wake (GPIO18 low) */
+        if (gpio_get_level(BUTTON1_GPIO) == 0) {
+            puts("Button1 pressed, waking MAX30102");
+            power_mgmt_set_freq(PM_MAX_FREQ_MHZ);  /* High freq for active mode */
+            s_led_active = true;  /* Re-enable LED task */
+            gpio_set_level(SYS_LED_PIN, 1);  /* Restore LED */
+            max30102_start();
+            last_interrupt_time = esp_timer_get_time();
+            vTaskDelay(pdMS_TO_TICKS(500));  /* debounce */
+            continue;
+        }
+
+        /* Check for MAX30102 interrupt (if it was re-activated) */
         if (max30102_get_int_count() > 0) {
             last_interrupt_time = esp_timer_get_time();
             max30102_reset_int_count();
         }
 
+        /* Timeout: no activity for 5min → deep-sleep */
         int64_t no_interrupt_sec = (esp_timer_get_time() - last_interrupt_time) / 1000000;
         if (no_interrupt_sec >= (TIMEOUT_DEEP_SLEEP_NO_INT / 1000)) {
-            puts("No MAX30102 interrupt for 5min, entering Deep-sleep");
-            system_set_state(STATE_DEEP_SLEEP);
+            request_deep_sleep("no activity for 5min");
             break;
         }
 
-        esp_sleep_enable_timer_wakeup(1000000);
+        /* Feed WDT before sleep, then sleep 1s */
+        esp_task_wdt_reset();
+        esp_sleep_enable_timer_wakeup(1000000);  /* 1 second */
         esp_light_sleep_start();
+    }
+
+restore:
+    /* Restore LED rate and button task */
+    s_led_on_ms = 500;
+    s_led_off_ms = 500;
+
+    /* Recreate button task if it was deleted */
+    if (s_button1_task_handle == NULL) {
+        xTaskCreate(button1_task, "button1", STACK_BUTTON1, NULL, 2, &s_button1_task_handle);
+        puts("Button1 polling restarted");
+    }
+
+    /* Recreate DHT11 task if it was deleted */
+    if (s_dht11_task_handle == NULL) {
+        xTaskCreate(dht11_task, "dht11", STACK_DHT11, NULL, 2, &s_dht11_task_handle);
+        puts("DHT11 task restarted");
     }
 
     power_mgmt_set_freq(PM_MAX_FREQ_MHZ);
@@ -873,8 +979,7 @@ static void main_loop(void)
             break;
 
         default:
-            puts("Unknown state, back to Deep-sleep");
-            s_system_state = STATE_DEEP_SLEEP;
+            request_deep_sleep("unknown state");
             break;
         }
     }
@@ -908,7 +1013,7 @@ void app_main(void)
     puts("========================================");
     fputs("  PPG Monitor v", stdout);
     puts(PPG_FW_VERSION);
-    puts("  ESP32-C3 | UART0 @ 1M baud");
+    puts("  ESP32-S3 | UART0 @ 1M baud");
     fputs("  Build: ", stdout);
     puts(PPG_FW_BUILD_TS);
     puts("========================================");
@@ -969,7 +1074,7 @@ void app_main(void)
     gpio_config(&boot_cfg);
 
     /* Create BUTTON1 monitor task */
-    xTaskCreate(button1_task, "button1", STACK_BUTTON1, NULL, 2, NULL);
+    xTaskCreate(button1_task, "button1", STACK_BUTTON1, NULL, 2, &s_button1_task_handle);
 
     puts("Resident tasks started: sys_led, ppg_led, button1");
 
@@ -988,9 +1093,9 @@ void app_main(void)
         puts("GPIO wake -> standalone");
         s_system_state = STATE_STANDALONE;
     } else {
-        /* Cold boot, default BLE advertising */
-        puts("Cold boot -> BLE advertising (quick connect)");
-        s_system_state = STATE_BLE_PAIRING;
+        /* Cold boot: RF off by default, standalone collection only */
+        puts("Cold boot -> standalone (RF off)");
+        s_system_state = STATE_STANDALONE;
     }
 
     /* Enter main loop */

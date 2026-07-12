@@ -16,6 +16,7 @@
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include <string.h>
@@ -32,10 +33,10 @@ static const char *TAG = "sd_storage";
 /* 挂载点 */
 #define MOUNT_POINT SD_MOUNT_POINT
 
-/* 主备缓冲 */
-#define PRIMARY_BUF_SIZE    (16 * 1024)     /* 16KB 主缓冲 (20秒填充) */
-#define BACKUP_BUF_SIZE     (4 * 1024)      /* 4KB 备缓冲 (5秒填充) */
-#define CSV_BUF_SIZE        (4 * 1024)      /* 4KB CSV 缓冲 */
+/* 主备缓冲 — S3 has 8MB PSRAM, use it for large buffers */
+#define PRIMARY_BUF_SIZE    (32 * 1024)     /* 32KB 主缓冲 (40秒填充, PSRAM) */
+#define BACKUP_BUF_SIZE     (8 * 1024)      /* 8KB 备缓冲 (10秒填充, PSRAM) */
+#define CSV_BUF_SIZE        (8 * 1024)      /* 8KB CSV 缓冲 (PSRAM) */
 #define COMPRESS_LEVEL      6               /* 压缩等级 1-9（6=平衡） */
 
 /* 缓冲区结构 */
@@ -159,11 +160,19 @@ static ssize_t safe_write(int fd, const void *ptr, size_t len)
 /* ========== 缓冲区操作 ========== */
 
 /**
- * @brief 初始化缓冲区
+ * @brief 初始化缓冲区 (prefer PSRAM for large buffers)
  */
 static esp_err_t init_buffer(buffer_t *buf, size_t size)
 {
-    buf->data = malloc(size);
+    /* Try PSRAM first for large buffers, fallback to internal SRAM */
+    if (size >= 4096) {
+        buf->data = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    } else {
+        buf->data = malloc(size);
+    }
+    if (!buf->data) {
+        buf->data = malloc(size);  /* Fallback to internal SRAM */
+    }
     if (!buf->data) {
         ESP_LOGE(TAG, "Buffer alloc failed (%u bytes)", (unsigned)size);
         return ESP_ERR_NO_MEM;
@@ -357,16 +366,18 @@ esp_err_t sd_storage_mount(void)
         return ret;
     }
 
-    /* Allocate CSV buffer */
-    s_csv_buf = malloc(CSV_BUF_SIZE);
+    /* Allocate CSV buffer (prefer PSRAM) */
+    s_csv_buf = heap_caps_malloc(CSV_BUF_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_csv_buf) s_csv_buf = malloc(CSV_BUF_SIZE);  /* Fallback */
     if (!s_csv_buf) {
         ESP_LOGE(TAG, "CSV buffer alloc failed");
         sd_storage_unmount();
         return ESP_ERR_NO_MEM;
     }
 
-    /* Allocate DHT11 buffer */
-    s_dht11_buf = malloc(CSV_BUF_SIZE);
+    /* Allocate DHT11 buffer (prefer PSRAM) */
+    s_dht11_buf = heap_caps_malloc(CSV_BUF_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_dht11_buf) s_dht11_buf = malloc(CSV_BUF_SIZE);  /* Fallback */
     if (!s_dht11_buf) {
         ESP_LOGE(TAG, "DHT11 buffer alloc failed");
         sd_storage_unmount();

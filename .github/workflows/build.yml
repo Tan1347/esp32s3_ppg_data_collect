@@ -221,6 +221,18 @@ jobs:
             fi
           done
           
+          echo "🗑️ Cleaning up old tags..."
+          TAGS=$(git tag -l "v*" --sort=-creatordate | head -20)
+          COUNT=0
+          for TAG in $TAGS; do
+            COUNT=$((COUNT + 1))
+            if [ $COUNT -gt 3 ]; then
+              echo "  Deleting tag: $TAG"
+              git push origin --delete "$TAG" 2>/dev/null || true
+              git tag -d "$TAG" 2>/dev/null || true
+            fi
+          done
+          
           echo "🗑️ Cleaning up old workflow runs (keeping last 3)..."
           
           RUNS=$(curl -s -H "Authorization: token $GH_TOKEN" \
@@ -239,133 +251,12 @@ jobs:
             if [ $COUNT -gt 3 ]; then
               echo "  Deleting run: $RUN_ID"
               curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
-                "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID"
-            fi
-          done
-          
-          echo "✅ Cleanup complete"
-          
-          # Build release body (limit to 300 chars)
-          RELEASE_BODY="Firmware: v${VERSION} (${CURRENT_SHORT})"$'\n\n'"Changes:"$'\n'"${COMMITS}"
-          
-          RELEASE_LEN=$(echo "$RELEASE_BODY" | wc -c)
-          if [ "$RELEASE_LEN" -gt 300 ]; then
-            RELEASE_BODY=$(echo "$RELEASE_BODY" | head -c 297)
-            RELEASE_BODY="${RELEASE_BODY}..."
-          fi
-          
-          echo "$RELEASE_BODY" > /tmp/release_body.txt
-          echo "📋 Release notes:"
-          cat /tmp/release_body.txt
-
-      # ========== Delete old release ==========
-      - name: Delete old release if tag exists
-        if: success()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          TAG="v${VERSION}"
-          RELEASE_ID=$(gh release view "$TAG" --json id -q '.id' 2>/dev/null || true)
-          if [ -n "$RELEASE_ID" ]; then
-            echo "🗑️ Deleting old release $TAG"
-            gh release delete "$TAG" --yes --cleanup-tag
-          fi
-
-      # ========== Create release ==========
-      - name: Create GitHub Release
-        if: success()
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: "Firmware v${{ steps.version.outputs.version }}"
-          body_path: /tmp/release_body.txt
-          files: /tmp/ppg-tf-esp32s3-v${{ steps.version.outputs.version }}.7z
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # ========== Cleanup old releases, tags, and workflow runs ==========
-      - name: Cleanup old releases and tags
-        if: success()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "🗑️ Cleaning up old releases (keeping last 3)..."
-          
-          # Get releases using GitHub API
-          RELEASES=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/${{ github.repository }}/releases?per_page=100" \
-            | jq -r 'sort_by(.created_at) | reverse | .[].tag_name')
-          
-          COUNT=0
-          for TAG in $RELEASES; do
-            COUNT=$((COUNT + 1))
-            if [ $COUNT -gt 3 ]; then
-              echo "  Deleting release: $TAG"
-              RELEASE_ID=$(curl -s -H "Authorization: token $GH_TOKEN" \
-                "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG" \
-                | jq -r '.id')
-              if [ -n "$RELEASE_ID" ] && [ "$RELEASE_ID" != "null" ]; then
-                curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
-                  "https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID" || true
-                curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
-                  "https://api.github.com/repos/${{ github.repository }}/git/refs/tags/$TAG" || true
-              fi
-            fi
-          done
-          
-          echo "🗑️ Cleaning up old tags..."
-          TAGS=$(git tag -l "v*" --sort=-creatordate | head -20)
-          COUNT=0
-          for TAG in $TAGS; do
-            COUNT=$((COUNT + 1))
-            if [ $COUNT -gt 3 ]; then
-              echo "  Deleting tag: $TAG"
-              git push origin --delete "$TAG" 2>/dev/null || true
-              git tag -d "$TAG" 2>/dev/null || true
+                "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" || true
             fi
           done
           
           echo "✅ Cleanup complete"
 
-      - name: Cleanup old workflow runs
-        if: success()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "🗑️ Cleaning up old workflow runs (keeping last 3)..."
-          
-          RUNS=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/runs?per_page=100&status=completed" \
-            | jq -r '.workflow_runs | sort_by(.created_at) | reverse | .[].id')
-          
-          COUNT=0
-          CURRENT_RUN_ID="${{ github.run_id }}"
-          for RUN_ID in $RUNS; do
-            COUNT=$((COUNT + 1))
-            if [ "$RUN_ID" = "$CURRENT_RUN_ID" ]; then
-              echo "  Skipping current run: $RUN_ID"
-              continue
-            fi
-            if [ $COUNT -gt 3 ]; then
-              echo "  Deleting run: $RUN_ID"
-              curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
-                "https://api.github.com/repos/${{ github.repository }}/actions/runs/$RUN_ID" || true
-            fi
-          done
-          
-          echo "✅ Workflow runs cleanup complete"
-
-      # ========== Summary ==========
-      - name: Build summary
+      - name: Cleanup summary
         if: always()
-        run: |
-          if [ "${{ job.status }}" = "success" ]; then
-            echo "✅ Build succeeded"
-            echo "📦 Version: v${{ steps.version.outputs.version }}"
-            echo "📦 Firmware: ${{ steps.firmware.outputs.size_kb }}KB"
-          else
-            echo "❌ Build failed"
-          fi
+        run: echo "✅ Release/tag/workflow cleanup done"
