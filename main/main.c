@@ -516,6 +516,18 @@ static void ppg_task(void *arg)
             sd_storage_write_csv(&s_algo_result);
             ble_svc_notify_live_data(&s_algo_result);
 
+#if PPG_DEBUG_ENABLE
+            printf("[PPG] HR=%ld(%c) SpO2=%ld(%c) Q=%d PK=%d IR_DC=%lu IR_Amp=%lu RED_DC=%lu R=%ld\n",
+                   (long)s_algo_result.heart_rate, s_algo_result.hr_valid ? 'V' : 'I',
+                   (long)s_algo_result.spo2, s_algo_result.spo2_valid ? 'V' : 'I',
+                   s_algo_result.quality,
+                   s_algo_result.peak_count,
+                   (unsigned long)s_algo_result.ir_dc_mean,
+                   (unsigned long)s_algo_result.ir_amplitude,
+                   (unsigned long)s_algo_result.red_dc_mean,
+                   (long)s_algo_result.spo2_ratio);
+#endif
+
             /* Check data validity (perfusion ratio) */
             if (!s_algo_result.hr_valid && !s_algo_result.spo2_valid) {
                 invalid_sec += 5;  /* Algorithm processes every 5s */

@@ -366,6 +366,58 @@ bool ppg_algo_process(ppg_algo_ctx_t *ctx, ppg_algo_result_t *result)
     ppg_algo_calc_spo2(ctx->ir_buffer, ctx->red_buffer, PPG_ALGO_BUFFER_SIZE,
                         &ctx->result.spo2, &ctx->result.spo2_valid);
 
+#if PPG_DEBUG_ENABLE
+    /* Signal quality */
+    ctx->result.quality = ppg_algo_get_quality(ctx);
+
+    /* IR DC mean and amplitude */
+    uint32_t ir_max = 0, ir_min = 0xFFFFFFFF;
+    uint32_t ir_sum = 0, red_sum = 0;
+    for (int i = 0; i < PPG_ALGO_BUFFER_SIZE; i++) {
+        if (ctx->ir_buffer[i] > ir_max) ir_max = ctx->ir_buffer[i];
+        if (ctx->ir_buffer[i] < ir_min) ir_min = ctx->ir_buffer[i];
+        ir_sum += ctx->ir_buffer[i];
+        red_sum += ctx->red_buffer[i];
+    }
+    ctx->result.ir_dc_mean = ir_sum / PPG_ALGO_BUFFER_SIZE;
+    ctx->result.ir_amplitude = ir_max - ir_min;
+    ctx->result.red_dc_mean = red_sum / PPG_ALGO_BUFFER_SIZE;
+
+    /* Peak count: zero crossings of AC-coupled IR (each pair = one peak) */
+    int32_t crossings = 0;
+    int32_t prev = 0;
+    for (int k = 0; k < PPG_ALGO_BUFFER_SIZE; k++) {
+        int32_t ac = (int32_t)ctx->ir_buffer[k] - (int32_t)ctx->result.ir_dc_mean;
+        if (k > 0 && ((prev >= 0 && ac < 0) || (prev < 0 && ac >= 0))) {
+            crossings++;
+        }
+        prev = ac;
+    }
+    ctx->result.peak_count = (crossings > 0) ? (crossings / 2) : 0;
+
+    /* SpO2 ratio (R value) — stored as ratio * 100 for readability */
+    if (ctx->result.spo2_valid && ctx->result.ir_dc_mean > 0 && ctx->result.red_dc_mean > 0) {
+        /* Simplified R: using AC/DC from peak-to-peak amplitude */
+        uint32_t red_ac = 0;
+        uint32_t ir_ac = ctx->result.ir_amplitude;
+        /* Estimate red AC from red buffer amplitude */
+        uint32_t red_max = 0, red_min = 0xFFFFFFFF;
+        for (int i = 0; i < PPG_ALGO_BUFFER_SIZE; i++) {
+            if (ctx->red_buffer[i] > red_max) red_max = ctx->red_buffer[i];
+            if (ctx->red_buffer[i] < red_min) red_min = ctx->red_buffer[i];
+        }
+        red_ac = red_max - red_min;
+        if (ir_ac > 0 && red_ac > 0) {
+            ctx->result.spo2_ratio = (int32_t)((red_ac * ctx->result.ir_dc_mean * 100) /
+                                                (ir_ac * ctx->result.red_dc_mean));
+        } else {
+            ctx->result.spo2_ratio = -1;
+        }
+    } else {
+        ctx->result.spo2_ratio = -1;
+    }
+#endif
+
     *result = ctx->result;
     return true;
 }

@@ -16,6 +16,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "ppg_config.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -35,6 +36,14 @@ typedef struct {
     int32_t spo2;               /**< 血氧 (%), -999 表示无效 */
     int8_t  hr_valid;           /**< 心率有效标志 (1=有效) */
     int8_t  spo2_valid;         /**< 血氧有效标志 (1=有效) */
+#if PPG_DEBUG_ENABLE
+    uint8_t quality;            /**< 信号质量 (0-100) */
+    uint8_t peak_count;         /**< 检测到的峰值数 */
+    uint32_t ir_dc_mean;        /**< IR 信号直流均值 */
+    uint32_t ir_amplitude;      /**< IR 信号幅度 (max-min) */
+    uint32_t red_dc_mean;       /**< RED 信号直流均值 */
+    int32_t spo2_ratio;         /**< SpO2 R 值 (AC_red/DC_red)/(AC_ir/DC_ir) * 100 */
+#endif
 } ppg_algo_result_t;
 
 /* ==================== 算法上下文 ==================== */

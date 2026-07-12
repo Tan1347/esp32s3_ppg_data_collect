@@ -50,6 +50,7 @@ typedef enum {
 /* Battery check switch: 1=enable, 0=disable (debug without battery) */
 #define BATTERY_CHECK_ENABLE    0
 #define DHT11_ENABLE            0
+#define PPG_DEBUG_ENABLE        1   /* PPG algo debug: print perfusion, quality, etc. */
 
 /* ==================== DHT11 (S3: GPIO15) ==================== */
 #define DHT11_GPIO_PIN              GPIO_NUM_15
