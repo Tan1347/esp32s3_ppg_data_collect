@@ -638,6 +638,19 @@ static void enter_ble_pairing(void)
     bool is_wakeup = is_gpio_wakeup();
     int timeout_sec = is_wakeup ? (TIMEOUT_BLE_PAIR_WAKEUP / 1000) : (TIMEOUT_BLE_PAIR_COLDBOOT / 1000);
 
+    /* Wait for NimBLE to sync before starting advertising */
+    int wait_ms = 0;
+    while (!ble_svc_is_nimble_synced() && wait_ms < 5000) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        wait_ms += 100;
+    }
+
+    if (!ble_svc_is_nimble_synced()) {
+        puts("BLE NimBLE sync timeout");
+        request_deep_sleep("BLE sync failed");
+        return;
+    }
+
     puts("BLE advertising started");
     ble_svc_start_advertising();
 

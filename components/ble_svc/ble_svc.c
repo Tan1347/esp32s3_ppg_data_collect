@@ -935,3 +935,8 @@ esp_err_t ble_svc_get_peer_addr(uint8_t *addr)
     memcpy(addr, desc.peer_id_addr.val, 6);
     return ESP_OK;
 }
+
+bool ble_svc_is_nimble_synced(void)
+{
+    return s_nimble_synced;
+}

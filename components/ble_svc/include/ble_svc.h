@@ -70,6 +70,12 @@ bool ble_svc_is_connected(void);
  */
 esp_err_t ble_svc_get_peer_addr(uint8_t *addr);
 
+/**
+ * @brief Check if NimBLE host has synced with controller
+ * @return true if synced, false otherwise
+ */
+bool ble_svc_is_nimble_synced(void);
+
 #ifdef __cplusplus
 }
 #endif
