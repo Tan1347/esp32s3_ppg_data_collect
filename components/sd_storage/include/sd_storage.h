@@ -11,7 +11,6 @@
 #pragma once
 
 #include "esp_err.h"
-#include "max30102.h"
 #include "ppg_algo.h"
 #include <stdint.h>
 #include <stdbool.h>
@@ -62,8 +61,8 @@ static inline bool verify_checksum(const void *data, size_t len)
     return p[len - 1] == calc_checksum(data, len);
 }
 
-/* Compatible type definitions */
-typedef max30102_raw_t max30102_sample_t;
+/* Compatible type definitions (sd_raw_record_t from ppg_config.h) */
+typedef sd_raw_record_t max30102_sample_t;
 typedef ppg_algo_result_t ppg_result_t;
 
 #ifdef __cplusplus
@@ -105,7 +104,7 @@ bool sd_storage_is_mounted(void);
  * @param sample 原始采样
  * @return ESP_OK 成功
  */
-esp_err_t sd_storage_write_raw(const max30102_sample_t *sample);
+esp_err_t sd_storage_write_raw(const sd_raw_record_t *sample);
 
 /**
  * @brief 写入算法结果到 CSV

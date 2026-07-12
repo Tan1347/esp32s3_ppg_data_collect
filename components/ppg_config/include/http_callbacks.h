@@ -39,6 +39,7 @@ typedef struct {
     /* OTA upgrade */
     const char *(*ota_get_version)(void);
     const char *(*ota_get_build_time)(void);
+    esp_err_t (*ota_upgrade_from_http)(size_t content_len, int (*read_func)(void *ctx, void *buf, size_t len), void *read_ctx);
 } http_callbacks_t;
 
 #ifdef __cplusplus

@@ -14,6 +14,14 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+/** UART recorder config (mirrors uart_recorder_config_t to avoid header dependency) */
+typedef struct {
+    uint32_t baud_rate;
+    uint8_t data_bits;
+    uint8_t parity;
+    uint8_t stop_bits;
+} ble_uart_config_t;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -44,6 +52,10 @@ typedef struct {
     void (*log_set_level)(uint8_t level);
     uint8_t (*log_get_level)(void);
     size_t (*log_get_buffer_count)(void);
+
+    /* UART recorder */
+    esp_err_t (*uart_record_start)(const ble_uart_config_t *config);
+    void (*uart_record_stop)(void);
 } ble_callbacks_t;
 
 #ifdef __cplusplus

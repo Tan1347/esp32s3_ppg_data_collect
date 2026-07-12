@@ -15,8 +15,8 @@
 
 #include "wifi_transfer.h"
 #include "ppg_config.h"
-#include "ota_upgrade.h"
 #include "esp_http_server.h"
+#include "esp_ota_ops.h"
 #include "esp_wifi.h"
 #include "esp_log.h"
 #include "esp_rom_crc.h"
@@ -356,8 +356,8 @@ static esp_err_t api_ota_upload_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "Start Web OTA, fw size: %d bytes", req->content_len);
 
-    /* 使用 ota_upgrade 组件处理 OTA */
-    esp_err_t ret = ota_upgrade_from_http(req->content_len, http_read_func, req);
+    /* 使用 ota_upgrade 回调处理 OTA */
+    esp_err_t ret = s_cbs->ota_upgrade_from_http(req->content_len, http_read_func, req);
 
     if (ret == ESP_OK) {
         const char *msg = "OTA 升级成功，即将重启...";

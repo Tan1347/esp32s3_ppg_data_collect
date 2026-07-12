@@ -403,7 +403,7 @@ bool sd_storage_is_mounted(void)
     return s_mounted;
 }
 
-esp_err_t sd_storage_write_raw(const max30102_sample_t *sample)
+esp_err_t sd_storage_write_raw(const sd_raw_record_t *sample)
 {
     if (!s_mounted || !s_active_buf) return ESP_ERR_INVALID_STATE;
 

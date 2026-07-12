@@ -21,7 +21,6 @@
 #include "ble_svc.h"
 #include "ppg_config.h"
 #include "ppg_log.h"
-#include "uart_recorder.h"
 #include "esp_log.h"
 #include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
@@ -543,7 +542,7 @@ static void cmd_uart_record(uint8_t cmd, const uint8_t *data, uint8_t len)
 
     if (enable) {
         /* Parse: [enable][baud_h][baud_2][baud_1][baud_l][data_bits][parity][stop_bits] */
-        uart_recorder_config_t cfg = {
+        ble_uart_config_t cfg = {
             .baud_rate = 115200,
             .data_bits = 8,
             .parity = 0,
@@ -560,7 +559,7 @@ static void cmd_uart_record(uint8_t cmd, const uint8_t *data, uint8_t len)
         if (len >= 7) cfg.parity = data[6];
         if (len >= 8) cfg.stop_bits = data[7];
 
-        esp_err_t ret = uart_recorder_start(&cfg);
+        esp_err_t ret = s_cbs->uart_record_start(&cfg);
         if (ret == ESP_OK) {
             PPG_LOGI(TAG, "cmd_uart_record", __LINE__, "UART record: %lu baud %d%c%d",
                      (unsigned long)cfg.baud_rate, cfg.data_bits,
@@ -571,7 +570,7 @@ static void cmd_uart_record(uint8_t cmd, const uint8_t *data, uint8_t len)
             ble_send_response(cmd, 0x01);  /* Failed */
         }
     } else {
-        uart_recorder_stop();
+        s_cbs->uart_record_stop();
         PPG_LOGI(TAG, "cmd_uart_record", __LINE__, "UART record stopped");
         ble_send_response(cmd, FRAME_STATUS_OK);
     }

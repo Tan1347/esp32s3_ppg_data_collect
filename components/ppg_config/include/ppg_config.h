@@ -169,6 +169,17 @@ typedef enum {
 #define BLE_QUALITY_VALID       80
 #define BLE_QUALITY_INVALID     20
 
+/**
+ * @brief PPG raw sample for SD storage (decoupled from max30102 driver)
+ *
+ * Layout matches max30102_raw_t but defined independently to avoid
+ * cross-component type dependency between sd_storage and max30102.
+ */
+typedef struct {
+    uint32_t red;   /**< Red light ADC value */
+    uint32_t ir;    /**< IR light ADC value */
+} sd_raw_record_t;
+
 /* ==================== System State API ==================== */
 void system_set_state(system_state_t new_state);
 system_state_t system_get_state(void);

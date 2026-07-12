@@ -88,6 +88,18 @@ static volatile bool s_led_active = true;
 
 /* ========== Lazy initialization ========== */
 
+/* Adapter: ble_uart_config_t -> uart_recorder_config_t (identical layout) */
+static esp_err_t ble_uart_record_start(const ble_uart_config_t *cfg)
+{
+    const uart_recorder_config_t *rec = (const uart_recorder_config_t *)cfg;
+    return uart_recorder_start(rec);
+}
+
+static void ble_uart_record_stop(void)
+{
+    uart_recorder_stop();
+}
+
 static const ble_callbacks_t s_ble_cbs = {
     .set_state = system_set_state,
     .get_voltage = battery_get_voltage,
@@ -105,6 +117,8 @@ static const ble_callbacks_t s_ble_cbs = {
     .log_set_level = ppg_log_set_level,
     .log_get_level = ppg_log_get_level,
     .log_get_buffer_count = ppg_log_get_buffer_count,
+    .uart_record_start = ble_uart_record_start,
+    .uart_record_stop = ble_uart_record_stop,
 };
 
 static const http_callbacks_t s_http_cbs = {
@@ -119,6 +133,7 @@ static const http_callbacks_t s_http_cbs = {
     .sd_get_free_mb = sd_storage_get_free_space_mb,
     .ota_get_version = ota_upgrade_get_current_version,
     .ota_get_build_time = ota_upgrade_get_build_time,
+    .ota_upgrade_from_http = ota_upgrade_from_http,
 };
 
 static esp_err_t ensure_ble_init(void)
@@ -480,7 +495,7 @@ static void ppg_task(void *arg)
 
         /* Process each sample */
         for (int i = 0; i < count; i++) {
-            sd_storage_write_raw(&batch_buf[i]);
+            sd_storage_write_raw((const sd_raw_record_t *)&batch_buf[i]);
             ppg_algo_add_sample(&s_algo_ctx, batch_buf[i].red, batch_buf[i].ir);
             total_samples++;
         }
@@ -766,7 +781,6 @@ static void enter_deep_sleep(void)
     /* Stop WiFi */
     if (s_wifi_initialized) {
         wifi_transfer_stop();
-        esp_wifi_stop();
         puts("[SLEEP] WiFi stopped");
     }
 
