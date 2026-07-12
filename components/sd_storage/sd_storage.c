@@ -419,12 +419,14 @@ esp_err_t sd_storage_write_raw(const sd_raw_record_t *sample)
         }
     }
 
-    /* Prepare binary record */
+    /* Prepare binary record with frame header/tail */
     ppg_raw_record_t record;
+    record.header = RAW_FRAME_HEADER;
     record.timestamp = (uint32_t)time(NULL);
     record.red = sample->red;
     record.ir = sample->ir;
     record.checksum = calc_checksum(&record, sizeof(record));
+    record.tail = RAW_FRAME_TAIL;
 
     /* Write to active buffer (protected by s_buf_mutex) */
     xSemaphoreTake(s_buf_mutex, portMAX_DELAY);

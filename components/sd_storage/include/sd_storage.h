@@ -18,15 +18,21 @@
 /* Binary data structures (packed, no padding) */
 
 /**
- * @brief PPG raw data record (13 bytes)
+ * @brief PPG raw data record with frame header/tail (15 bytes)
  *
  * Stored in /raw/ directory as binary file
+ * Frame format: [0xAA][timestamp][red][ir][checksum][0x55]
  */
+#define RAW_FRAME_HEADER    0xAA
+#define RAW_FRAME_TAIL      0x55
+
 typedef struct __attribute__((packed)) {
+    uint8_t  header;        /* Frame header (0xAA) */
     uint32_t timestamp;     /* Unix timestamp (seconds) */
     uint32_t red;           /* Red light raw value */
     uint32_t ir;            /* IR light raw value */
-    uint8_t  checksum;      /* XOR of all previous bytes */
+    uint8_t  checksum;      /* XOR of header + timestamp + red + ir */
+    uint8_t  tail;          /* Frame tail (0x55) */
 } ppg_raw_record_t;
 
 /**
