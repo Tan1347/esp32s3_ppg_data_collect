@@ -630,6 +630,9 @@ static bool poll_until(bool (*cond)(void), int timeout_sec, const char *label)
 
 static void enter_ble_pairing(void)
 {
+    /* Stop PPG collection if running — prevents race with main_loop */
+    stop_collection_tasks();
+
     if (ensure_ble_init() != ESP_OK) {
         request_deep_sleep("BLE init failed");
         return;
