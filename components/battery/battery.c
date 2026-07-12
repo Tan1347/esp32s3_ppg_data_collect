@@ -96,7 +96,9 @@ esp_err_t battery_init(void)
 
 uint32_t battery_get_voltage(void)
 {
-    if (!s_initialized) return 0;
+    static uint32_t s_last_good = 0;
+
+    if (!s_initialized) return s_last_good;
 
     int raw_sum = 0;
     int valid_count = 0;
@@ -104,13 +106,13 @@ uint32_t battery_get_voltage(void)
     for (int i = 0; i < BATTERY_SAMPLE_COUNT; i++) {
         int raw;
         esp_err_t ret = adc_oneshot_read(s_adc_handle, BATTERY_ADC_CHANNEL, &raw);
-        if (ret == ESP_OK) {
+        if (ret == ESP_OK && raw > 100) {
             raw_sum += raw;
             valid_count++;
         }
     }
 
-    if (valid_count == 0) return 0;
+    if (valid_count == 0) return s_last_good;
 
     int raw_avg = raw_sum / valid_count;
 
@@ -127,6 +129,9 @@ uint32_t battery_get_voltage(void)
     /* 返回 ×100, 即 adc_mv * 2 / 10 */
     uint32_t voltage_x100 = (uint32_t)adc_mv * 2 / 10;
 
+    if (voltage_x100 > 0) {
+        s_last_good = voltage_x100;
+    }
     return voltage_x100;
 }
 
