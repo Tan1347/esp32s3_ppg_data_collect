@@ -181,22 +181,37 @@ esp_err_t max30102_configure(const max30102_config_t *config)
 
 esp_err_t max30102_start(void)
 {
-    /* SpO2 模式 */
-    esp_err_t ret = max30102_write_reg(MAX30102_REG_MODE_CONFIG, 0x03);
+    /* Restore LED currents before entering SpO2 mode */
+    esp_err_t ret = max30102_set_led_current(0x24, 0x24);
+    if (ret != ESP_OK) {
+        printf("[MAX30102] Restore LED currents failed: 0x%x\n", ret);
+        return ret;
+    }
+
+    /* SpO2 mode */
+    ret = max30102_write_reg(MAX30102_REG_MODE_CONFIG, 0x03);
     if (ret == ESP_OK) {
         s_measuring = true;
-        ESP_LOGI(TAG, "MAX30102 sampling started");
+        puts("[MAX30102] Started (SpO2 mode)");
     }
     return ret;
 }
 
 esp_err_t max30102_stop(void)
 {
-    /* 关机模式 */
-    esp_err_t ret = max30102_write_reg(MAX30102_REG_MODE_CONFIG, 0x80);
+    /* Turn off LED currents first (hardware-level LED shutdown) */
+    esp_err_t ret = max30102_set_led_current(0, 0);
+    if (ret != ESP_OK) {
+        printf("[MAX30102] Zero LED currents failed: 0x%x\n", ret);
+    }
+
+    /* Enter shutdown mode */
+    ret = max30102_write_reg(MAX30102_REG_MODE_CONFIG, 0x80);
     if (ret == ESP_OK) {
         s_measuring = false;
-        ESP_LOGI(TAG, "MAX30102 sampling stopped");
+        puts("[MAX30102] Shutdown OK");
+    } else {
+        printf("[MAX30102] Shutdown FAILED: 0x%x\n", ret);
     }
     return ret;
 }

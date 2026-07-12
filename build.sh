@@ -51,6 +51,7 @@ BUILD_EXIT_CODE=0
     IDF_PATH="$IDF_PATH" bash -c "
         source '$IDF_PATH/export.sh' 2>/dev/null
         cd '$SCRIPT_DIR'
+        idf.py reconfigure
         idf.py build
     "
 } 2>&1 | tee "$LOG_FILE" || BUILD_EXIT_CODE=$?

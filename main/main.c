@@ -40,7 +40,9 @@
 #include "ppg_log.h"
 #include "ota_upgrade.h"
 #include "uart_recorder.h"
+#if DHT11_ENABLE
 #include "dht11.h"
+#endif
 #include "esp_wifi.h"
 #include "esp_http_client.h"
 #include "esp_task_wdt.h"
@@ -68,7 +70,9 @@ static volatile bool s_ppg_collecting = false;
 /* Collection task handles */
 static TaskHandle_t s_ppg_task_handle = NULL;
 static TaskHandle_t s_power_task_handle = NULL;
+#if DHT11_ENABLE
 static TaskHandle_t s_dht11_task_handle = NULL;
+#endif
 static TaskHandle_t s_button1_task_handle = NULL;
 
 /* PPG algorithm context (in BSS to avoid stack overflow) */
@@ -79,7 +83,9 @@ static max30102_raw_t s_raw_sample;
 /* Forward declarations */
 static void ppg_task(void *arg);
 static void power_task(void *arg);
+#if DHT11_ENABLE
 static void dht11_task(void *arg);
+#endif
 static void button1_task(void *arg);
 static void sys_led_task(void *arg);
 static void request_deep_sleep(const char *reason);
@@ -184,25 +190,35 @@ static void start_collection_tasks(void)
     if (s_power_task_handle == NULL) {
         xTaskCreate(power_task, "power", STACK_POWER, NULL, 1, &s_power_task_handle);
     }
+#if DHT11_ENABLE
     if (s_dht11_task_handle == NULL) {
         xTaskCreate(dht11_task, "dht11", STACK_DHT11, NULL, 2, &s_dht11_task_handle);
     }
+#endif
 }
 
 static void stop_collection_tasks(void)
 {
     /* Wait for tasks to exit (they check s_system_state and self-delete) */
-    TaskHandle_t handles[] = { s_ppg_task_handle, s_power_task_handle, s_dht11_task_handle };
-    for (int i = 0; i < 3; i++) {
+    TaskHandle_t handles[] = { s_ppg_task_handle, s_power_task_handle,
+#if DHT11_ENABLE
+                               s_dht11_task_handle
+#endif
+                             };
+    int num_handles = sizeof(handles) / sizeof(handles[0]);
+    for (int i = 0; i < num_handles; i++) {
         if (handles[i] != NULL) {
             for (int retry = 0; retry < 50 && eTaskGetState(handles[i]) != eDeleted; retry++) {
+                esp_task_wdt_reset();
                 vTaskDelay(pdMS_TO_TICKS(100));
             }
         }
     }
     s_ppg_task_handle = NULL;
     s_power_task_handle = NULL;
+#if DHT11_ENABLE
     s_dht11_task_handle = NULL;
+#endif
 }
 
 /* ========== System initialization ========== */
@@ -247,7 +263,9 @@ static esp_err_t system_init(void)
     }
 
     INIT_CHECK(max30102_init(), "MAX30102");
+#if DHT11_ENABLE
     INIT_CHECK(dht11_init(), "DHT11");
+#endif
     INIT_CHECK(ota_upgrade_init(NULL), "OTA");
     INIT_CHECK(uart_recorder_init(), "UART recorder");
 
@@ -303,15 +321,16 @@ static void sys_led_task(void *arg)
 
     while (1) {
         if (s_led_active) {
+            int on_ms = s_led_on_ms;
+            int off_ms = s_led_off_ms;
             gpio_set_level(SYS_LED_PIN, 1);
-            /* Feed WDT in small chunks during long sleep */
-            for (int i = 0; i < s_led_on_ms / 1000; i++) {
-                vTaskDelay(pdMS_TO_TICKS(1000));
+            for (int rem = on_ms; rem > 0; rem -= 1000) {
+                vTaskDelay(pdMS_TO_TICKS(rem > 1000 ? 1000 : rem));
                 if (wdt_ok) esp_task_wdt_reset();
             }
             gpio_set_level(SYS_LED_PIN, 0);
-            for (int i = 0; i < s_led_off_ms / 1000; i++) {
-                vTaskDelay(pdMS_TO_TICKS(1000));
+            for (int rem = off_ms; rem > 0; rem -= 1000) {
+                vTaskDelay(pdMS_TO_TICKS(rem > 1000 ? 1000 : rem));
                 if (wdt_ok) esp_task_wdt_reset();
             }
         } else {
@@ -553,6 +572,7 @@ static void power_task(void *arg)
     vTaskDelete(NULL);
 }
 
+#if DHT11_ENABLE
 /**
  * @brief DHT11 temperature/humidity task
  */
@@ -581,6 +601,7 @@ static void dht11_task(void *arg)
     s_dht11_task_handle = NULL;
     vTaskDelete(NULL);
 }
+#endif /* DHT11_ENABLE */
 
 /* ========== BLE/WiFi modes ========== */
 
@@ -827,19 +848,14 @@ static void handle_standalone_state(void)
     s_led_on_ms = 1000;
     s_led_off_ms = 9000;
 
-    /* Stop button polling for low power */
-    if (s_button1_task_handle != NULL) {
-        vTaskDelete(s_button1_task_handle);
-        s_button1_task_handle = NULL;
-        puts("Button1 polling stopped");
-    }
-
+#if DHT11_ENABLE
     /* Stop DHT11 task (not needed in standalone, reduces wake-ups) */
     if (s_dht11_task_handle != NULL) {
         vTaskDelete(s_dht11_task_handle);
         s_dht11_task_handle = NULL;
         puts("DHT11 task stopped");
     }
+#endif
 
     /* Stay awake 30s, then manual light-sleep */
     puts("Staying awake for 30s...");
@@ -853,12 +869,25 @@ static void handle_standalone_state(void)
     }
     puts("30s elapsed, entering manual Light-sleep...");
 
+    /* Stop all collection tasks — they access SD card which is unsafe during light-sleep */
+    stop_collection_tasks();
+
+    /* Stop button polling for low power (keep alive during 30s for mode switch) */
+    esp_task_wdt_reset();
+    if (s_button1_task_handle != NULL) {
+        vTaskDelete(s_button1_task_handle);
+        s_button1_task_handle = NULL;
+        puts("Button1 polling stopped");
+    }
+
     /* Turn off LEDs and disable LED task */
+    esp_task_wdt_reset();
     s_led_active = false;
     gpio_set_level(SYS_LED_PIN, 0);
     gpio_set_level(PPG_LED_PIN, 0);
 
     /* Shutdown MAX30102 to save power during light-sleep */
+    esp_task_wdt_reset();
     max30102_stop();
     puts("MAX30102 shutdown, LEDs off for light-sleep");
 
@@ -869,14 +898,15 @@ static void handle_standalone_state(void)
 
         /* Check for button1 wake (GPIO18 low) */
         if (gpio_get_level(BUTTON1_GPIO) == 0) {
-            puts("Button1 pressed, waking MAX30102");
-            power_mgmt_set_freq(PM_MAX_FREQ_MHZ);  /* High freq for active mode */
-            s_led_active = true;  /* Re-enable LED task */
-            gpio_set_level(SYS_LED_PIN, 1);  /* Restore LED */
-            max30102_start();
-            last_interrupt_time = esp_timer_get_time();
+            puts("Button1 pressed -> toggle mode");
+            /* Restore everything and let main_loop handle the state change */
+            s_led_active = true;
+            gpio_set_level(SYS_LED_PIN, 1);
+            power_mgmt_set_freq(PM_MAX_FREQ_MHZ);
+            /* Toggle: STANDALONE -> MEASURING */
+            system_set_state(STATE_MEASURING);
             vTaskDelay(pdMS_TO_TICKS(500));  /* debounce */
-            continue;
+            break;  /* Exit light-sleep loop, main_loop handles state */
         }
 
         /* Check for MAX30102 interrupt (if it was re-activated) */
@@ -909,11 +939,13 @@ restore:
         puts("Button1 polling restarted");
     }
 
+#if DHT11_ENABLE
     /* Recreate DHT11 task if it was deleted */
     if (s_dht11_task_handle == NULL) {
         xTaskCreate(dht11_task, "dht11", STACK_DHT11, NULL, 2, &s_dht11_task_handle);
         puts("DHT11 task restarted");
     }
+#endif
 
     power_mgmt_set_freq(PM_MAX_FREQ_MHZ);
     puts("Standalone done");
@@ -1036,9 +1068,9 @@ void app_main(void)
     };
     esp_err_t wdt_ret = esp_task_wdt_init(&wdt_cfg);
     if (wdt_ret == ESP_ERR_INVALID_STATE) {
-        puts("Task WDT already init, skip");
+        puts("Task WDT already init (IDF default 5s), skip");
     } else if (wdt_ret == ESP_OK) {
-        puts("Task WDT enabled (5s)");
+        puts("Task WDT enabled (10s)");
     } else {
         puts("Task WDT init failed");
     }
