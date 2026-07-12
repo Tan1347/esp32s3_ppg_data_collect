@@ -169,6 +169,19 @@ typedef enum {
 #define BLE_QUALITY_VALID       80
 #define BLE_QUALITY_INVALID     20
 
+/* ==================== Application Constants ==================== */
+#define IR_AMPLITUDE_NO_FINGER  500     /* IR amplitude below this = no finger */
+#define BATTERY_CHECK_INTERVAL  100     /* Check battery every N samples */
+#define WIFI_MAINTAIN_SEC       60      /* WiFi maintain timeout (seconds) */
+#define LOW_VOLTAGE_THRESHOLD   330     /* Low battery threshold (mV, raw ADC) */
+#define LOW_VOLTAGE_COUNT_MAX   3       /* Consecutive low readings before action */
+#define HR_VALID_MIN            40      /* Heart rate minimum valid (bpm) */
+#define HR_VALID_MAX            200     /* Heart rate maximum valid (bpm) */
+#define PEAK_COUNT_MIN          2       /* Minimum peaks for valid HR */
+#define PEAK_COUNT_MAX          25      /* Maximum peaks (noise filter) */
+#define SPO2_RATIO_MIN          10      /* SpO2 ratio minimum valid */
+#define SPO2_RATIO_MAX          180     /* SpO2 ratio maximum valid */
+
 /**
  * @brief PPG raw sample for SD storage (decoupled from max30102 driver)
  *

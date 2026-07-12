@@ -41,6 +41,7 @@ static char s_current_ssid[33] = {0};  /* Currently connected WiFi SSID */
 /* 指数退避重连 */
 static esp_timer_handle_t s_reconnect_timer = NULL;
 static uint32_t s_reconnect_fail_count = 0;
+static int s_current_cred_index = 0;  /* Index of credential being tried */
 
 /* ========== NVS 操作 ========== */
 
@@ -137,11 +138,35 @@ static uint32_t calc_backoff_ms(void)
 
 static void reconnect_timer_cb(void *arg)
 {
-    if (s_connected) return;  /* 已连接，不需要重连 */
+    if (s_connected) return;  /* Already connected */
 
-    uint32_t delay_ms = calc_backoff_ms();
-    ESP_LOGI(TAG, "WiFi reconnect #%d, backoff %lums", s_reconnect_fail_count + 1, (unsigned long)delay_ms);
-    esp_wifi_connect();
+    /* Rotate to next valid credential */
+    int tried = 0;
+    while (tried < s_cred_count) {
+        s_current_cred_index = (s_current_cred_index + 1) % s_cred_count;
+        wifi_cred_t *cred = &s_creds[s_current_cred_index];
+        if (cred->fail_count < 3) {
+            /* Found a valid credential, configure and connect */
+            ESP_LOGI(TAG, "WiFi reconnect #%d, trying cred #%d: %s",
+                     s_reconnect_fail_count + 1, s_current_cred_index, cred->ssid);
+            strncpy(s_current_ssid, cred->ssid, sizeof(s_current_ssid) - 1);
+            s_current_ssid[sizeof(s_current_ssid) - 1] = '\0';
+            wifi_config_t wifi_cfg = {0};
+            strncpy((char *)wifi_cfg.sta.ssid, cred->ssid, sizeof(wifi_cfg.sta.ssid));
+            strncpy((char *)wifi_cfg.sta.password, cred->password, sizeof(wifi_cfg.sta.password));
+            wifi_cfg.sta.pmf_cfg.capable = true;
+            wifi_cfg.sta.pmf_cfg.required = false;
+            wifi_cfg.sta.threshold.rssi = -75;
+            wifi_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+            esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg);
+            esp_wifi_connect();
+            return;
+        }
+        tried++;
+    }
+
+    /* All credentials exhausted */
+    ESP_LOGW(TAG, "All WiFi credentials exhausted, giving up");
 }
 
 static void schedule_reconnect(void)
@@ -187,7 +212,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         snprintf(s_current_ip, sizeof(s_current_ip), IPSTR, IP2STR(&event->ip_info.ip));
         s_connected = true;
-        s_reconnect_fail_count = 0;  /* 连接成功，重置退避计数 */
+        s_reconnect_fail_count = 0;  /* Connection succeeded, reset backoff */
+        s_current_cred_index = 0;    /* Reset credential rotation */
         ESP_LOGI(TAG, "WiFi connected, IP: %s", s_current_ip);
     }
 }
@@ -439,7 +465,8 @@ esp_err_t wifi_prov_auto_connect(void)
         ESP_LOGI(TAG, "Try connect WiFi #%d: SSID=[%s] pwd_len=%d prio=%d",
                  i, cred->ssid, (int)strlen(cred->password), cred->priority);
 
-        /* Save SSID for connection status tracking */
+        /* Save SSID and index for connection status tracking */
+        s_current_cred_index = i;
         strncpy(s_current_ssid, cred->ssid, sizeof(s_current_ssid) - 1);
         s_current_ssid[sizeof(s_current_ssid) - 1] = '\0';
 

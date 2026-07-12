@@ -186,13 +186,13 @@ void ppg_algo_calc_hr(uint32_t *ir_buffer, int32_t buffer_length,
 
     /* Calculate heart rate from peak intervals */
     n_peak_interval_sum = 0;
-    if (n_npks >= 2 && n_npks <= 25) {
+    if (n_npks >= PEAK_COUNT_MIN && n_npks <= PEAK_COUNT_MAX) {
         for (k = 1; k < n_npks; k++)
             n_peak_interval_sum += (an_dx_peak_locs[k] - an_dx_peak_locs[k-1]);
         n_peak_interval_sum = n_peak_interval_sum / (n_npks - 1);
         *heart_rate = 6000 / n_peak_interval_sum;  /* bpm */
-        /* Reject unrealistic HR (noise produces >200 or <40 bpm) */
-        if (*heart_rate >= 40 && *heart_rate <= 200) {
+        /* Reject unrealistic HR (noise produces >HR_VALID_MAX or <HR_VALID_MIN bpm) */
+        if (*heart_rate >= HR_VALID_MIN && *heart_rate <= HR_VALID_MAX) {
             *hr_valid = 1;
         } else {
             *heart_rate = -999;
@@ -310,7 +310,7 @@ void ppg_algo_calc_spo2(uint32_t *ir_buffer, uint32_t *red_buffer,
         n_ratio_average = an_ratio[n_middle_idx];
 
     /* Step 9: 查表获取 SpO2 */
-    if (n_i_ratio_count >= 2 && n_ratio_average > 10 && n_ratio_average < 180) {
+    if (n_i_ratio_count >= 2 && n_ratio_average > SPO2_RATIO_MIN && n_ratio_average < SPO2_RATIO_MAX) {
         *spo2 = uch_spo2_table[n_ratio_average];
         *spo2_valid = 1;
     } else {

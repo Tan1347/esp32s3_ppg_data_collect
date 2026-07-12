@@ -501,7 +501,7 @@ static void ppg_task(void *arg)
         }
 
 #if BATTERY_CHECK_ENABLE
-        if (total_samples >= 100) {
+        if (total_samples >= BATTERY_CHECK_INTERVAL) {
             total_samples = 0;
             uint8_t batt_pct = battery_voltage_to_soc(battery_get_voltage());
             if (batt_pct < BATTERY_PPG_MIN_SOC) {
@@ -532,7 +532,7 @@ static void ppg_task(void *arg)
             bool data_valid = s_algo_result.hr_valid || s_algo_result.spo2_valid;
 #if PPG_DEBUG_ENABLE
             /* Also reject if IR amplitude too low (no finger) */
-            if (s_algo_result.ir_amplitude < 500) data_valid = false;
+            if (s_algo_result.ir_amplitude < IR_AMPLITUDE_NO_FINGER) data_valid = false;
 #endif
             if (!data_valid) {
                 invalid_sec += 5;  /* Algorithm processes every 5s */
@@ -586,11 +586,12 @@ static void power_task(void *arg)
 
         /* Low voltage protection: 3 consecutive readings < 3.3V */
 #if BATTERY_CHECK_ENABLE
-        if (voltage < 330) {
+        if (voltage < LOW_VOLTAGE_THRESHOLD) {
             low_voltage_count++;
-            printf("[POWER] Battery low (%lu.%02luV), count=%d/3\n",
-                   (unsigned long)(voltage / 100), (unsigned long)(voltage % 100), low_voltage_count);
-            if (low_voltage_count >= 3) {
+            printf("[POWER] Battery low (%lu.%02luV), count=%d/%d\n",
+                   (unsigned long)(voltage / 100), (unsigned long)(voltage % 100),
+                   low_voltage_count, LOW_VOLTAGE_COUNT_MAX);
+            if (low_voltage_count >= LOW_VOLTAGE_COUNT_MAX) {
                 request_deep_sleep("battery low");
                 xEventGroupSetBits(s_system_event_group, EVT_SHUTDOWN);
                 break;
@@ -727,9 +728,9 @@ static void enter_wifi_mode(void)
     wifi_transfer_start(&s_http_cbs);
 
     /* Maintain connection for 1 minute (auto-close if no activity) */
-    puts("WiFi active, auto-close in 60s if no activity");
+    printf("WiFi active, auto-close in %ds if no activity\n", WIFI_MAINTAIN_SEC);
     int maintain_sec = 0;
-    while (maintain_sec < 60) {
+    while (maintain_sec < WIFI_MAINTAIN_SEC) {
         vTaskDelay(pdMS_TO_TICKS(1000));
         esp_task_wdt_reset();
         maintain_sec++;
