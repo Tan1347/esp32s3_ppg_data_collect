@@ -214,6 +214,7 @@ static void stop_collection_tasks(void)
             for (int retry = 0; retry < 50 && eTaskGetState(handles[i]) != eDeleted; retry++) {
                 esp_task_wdt_reset();
                 vTaskDelay(pdMS_TO_TICKS(100));
+                esp_task_wdt_reset();
             }
         }
     }
@@ -918,8 +919,11 @@ static void handle_standalone_state(void)
     if (s_bad_signal) {
         printf("Bad signal: deep-sleep in %ds\n", BAD_SIGNAL_LIGHT_SLEEP_SEC);
     }
+
+    /* Remove main task from WDT — IDLE task feeds WDT during light-sleep */
+    esp_task_wdt_delete(NULL);
+
     while (s_system_state == STATE_STANDALONE) {
-        esp_task_wdt_reset();
 
         /* Check for button1 wake (GPIO18 low) */
         if (gpio_get_level(BUTTON1_GPIO) == 0) {
@@ -948,12 +952,14 @@ static void handle_standalone_state(void)
         }
 
         /* Feed WDT before sleep, then sleep 1s */
-        esp_task_wdt_reset();
         esp_sleep_enable_timer_wakeup(1000000);  /* 1 second */
         esp_light_sleep_start();
     }
 
 restore:
+    /* Re-add main task to WDT */
+    esp_task_wdt_add(NULL);
+
     /* Restore LED rate and button task */
     s_led_on_ms = 500;
     s_led_off_ms = 500;
