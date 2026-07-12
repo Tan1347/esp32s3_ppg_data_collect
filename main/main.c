@@ -67,6 +67,9 @@ static bool s_wifi_initialized = false;
 /* PPG collection status (for LED task) */
 static volatile bool s_ppg_collecting = false;
 
+/* Bad signal flag: set by ppg_task when data invalid > BAD_SIGNAL_TIMEOUT_SEC */
+static volatile bool s_bad_signal = false;
+
 /* Collection task handles */
 static TaskHandle_t s_ppg_task_handle = NULL;
 static TaskHandle_t s_power_task_handle = NULL;
@@ -469,6 +472,7 @@ static void ppg_task(void *arg)
     int sample_count = 0;
 #endif
     int no_data_sec = 0;
+    int invalid_sec = 0;  /* Consecutive seconds with invalid result */
     int64_t last_data_time = esp_timer_get_time();
 
     while (s_system_state == STATE_MEASURING || s_system_state == STATE_STANDALONE) {
@@ -510,6 +514,19 @@ static void ppg_task(void *arg)
         if (ppg_algo_process(&s_algo_ctx, &s_algo_result)) {
             sd_storage_write_csv(&s_algo_result);
             ble_svc_notify_live_data(&s_algo_result);
+
+            /* Check data validity (perfusion ratio) */
+            if (!s_algo_result.hr_valid && !s_algo_result.spo2_valid) {
+                invalid_sec += 5;  /* Algorithm processes every 5s */
+                printf("[PPG] Invalid data, %ds/%ds\n", invalid_sec, BAD_SIGNAL_TIMEOUT_SEC);
+                if (invalid_sec >= BAD_SIGNAL_TIMEOUT_SEC) {
+                    puts("[PPG] Bad signal for 10s, stopping");
+                    s_bad_signal = true;
+                    break;
+                }
+            } else {
+                invalid_sec = 0;  /* Reset on valid data */
+            }
         }
     }
 
@@ -858,16 +875,20 @@ static void handle_standalone_state(void)
 #endif
 
     /* Stay awake 30s, then manual light-sleep */
-    puts("Staying awake for 30s...");
-    for (int i = TIMEOUT_STANDBY_AWAKE / 1000; i > 0; i--) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
-        esp_task_wdt_reset();
-        if (i % 10 == 0) {
-            printf("  %ds remaining...\n", i);
+    if (s_bad_signal) {
+        puts("Bad signal detected, skip 30s countdown");
+    } else {
+        puts("Staying awake for 30s...");
+        for (int i = TIMEOUT_STANDBY_AWAKE / 1000; i > 0; i--) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            esp_task_wdt_reset();
+            if (i % 10 == 0) {
+                printf("  %ds remaining...\n", i);
+            }
+            if (s_system_state != STATE_STANDALONE) goto restore;
         }
-        if (s_system_state != STATE_STANDALONE) goto restore;
     }
-    puts("30s elapsed, entering manual Light-sleep...");
+    puts("Entering manual Light-sleep...");
 
     /* Stop all collection tasks — they access SD card which is unsafe during light-sleep */
     stop_collection_tasks();
@@ -893,6 +914,10 @@ static void handle_standalone_state(void)
 
     /* Manual light-sleep loop: 1s timer wake, check button1 */
     int64_t last_interrupt_time = esp_timer_get_time();
+    int deep_sleep_ms = s_bad_signal ? (BAD_SIGNAL_LIGHT_SLEEP_SEC * 1000) : TIMEOUT_DEEP_SLEEP_NO_INT;
+    if (s_bad_signal) {
+        printf("Bad signal: deep-sleep in %ds\n", BAD_SIGNAL_LIGHT_SLEEP_SEC);
+    }
     while (s_system_state == STATE_STANDALONE) {
         esp_task_wdt_reset();
 
@@ -915,9 +940,9 @@ static void handle_standalone_state(void)
             max30102_reset_int_count();
         }
 
-        /* Timeout: no activity for 5min → deep-sleep */
+        /* Timeout: no activity -> deep-sleep */
         int64_t no_interrupt_sec = (esp_timer_get_time() - last_interrupt_time) / 1000000;
-        if (no_interrupt_sec >= (TIMEOUT_DEEP_SLEEP_NO_INT / 1000)) {
+        if (no_interrupt_sec * 1000 >= deep_sleep_ms) {
             request_deep_sleep("no activity for 5min");
             break;
         }
@@ -932,6 +957,7 @@ restore:
     /* Restore LED rate and button task */
     s_led_on_ms = 500;
     s_led_off_ms = 500;
+    s_bad_signal = false;
 
     /* Recreate button task if it was deleted */
     if (s_button1_task_handle == NULL) {

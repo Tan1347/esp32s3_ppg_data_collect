@@ -153,6 +153,8 @@ typedef enum {
 #define TIMEOUT_WDT                 10000  /* 10s: enough for 1s LED toggle + margin */
 #define TIMEOUT_BUTTON_LONG_PRESS   3000
 #define TIMEOUT_BLE_CMD_DELAY       500
+#define BAD_SIGNAL_TIMEOUT_SEC      10      /* Invalid data for this long -> sleep */
+#define BAD_SIGNAL_LIGHT_SLEEP_SEC  30      /* Light-sleep before deep-sleep */
 
 /* ==================== LED Blink ==================== */
 #define PPG_LED_RATE_OFF        30
