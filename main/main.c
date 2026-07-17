@@ -516,7 +516,7 @@ static void ppg_task(void *arg)
 
         last_data_time = esp_timer_get_time();
         no_data_sec = 0;
-        printf("[PPG] FIFO read %d samples, total=%d\n", count, total_samples);
+        //printf("[PPG] FIFO read %d samples, total=%d\n", count, total_samples);
 
         /* Process each sample */
         for (int i = 0; i < count; i++) {
