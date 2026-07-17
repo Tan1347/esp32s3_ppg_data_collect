@@ -8,7 +8,7 @@
 #include <stdint.h>
 
 /* ==================== Firmware Version ==================== */
-#define PPG_FW_VERSION          "1.0.9"
+#define PPG_FW_VERSION          "1.1.0"
 #include "version_ts.h"
 
 /* ==================== System State ==================== */

@@ -56,6 +56,9 @@ typedef struct {
     /* UART recorder */
     esp_err_t (*uart_record_start)(const ble_uart_config_t *config);
     void (*uart_record_stop)(void);
+
+    /* MAX30102 read mode */
+    void (*max30102_set_polling)(bool enable);
 } ble_callbacks_t;
 
 #ifdef __cplusplus

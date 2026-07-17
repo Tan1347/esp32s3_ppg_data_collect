@@ -287,6 +287,9 @@ static void cmd_start_measure(uint8_t cmd, const uint8_t *data, uint8_t len)
 {
     (void)data; (void)len;
     PPG_LOGI(TAG, "cmd_start_measure", __LINE__, "Start measure");
+    if (s_cbs->max30102_set_polling) {
+        s_cbs->max30102_set_polling(true);
+    }
     s_cbs->set_state(STATE_MEASURING);
     ble_send_response(cmd, FRAME_STATUS_OK);
 }
@@ -295,6 +298,9 @@ static void cmd_stop_measure(uint8_t cmd, const uint8_t *data, uint8_t len)
 {
     (void)data; (void)len;
     PPG_LOGI(TAG, "cmd_stop_measure", __LINE__, "Stop measure");
+    if (s_cbs->max30102_set_polling) {
+        s_cbs->max30102_set_polling(false);
+    }
     s_cbs->set_state(STATE_BLE_CONNECTED);
     ble_send_response(cmd, FRAME_STATUS_OK);
 }
@@ -728,6 +734,10 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         s_status_subscribed = false;
         PPG_LOGI(TAG, "gap_event", __LINE__, "BLE disconnected, reason=%d", event->disconnect.reason);
         BLE_DEBUG_LOG("Disconnected: reason=%d", event->disconnect.reason);
+        /* Switch MAX30102 back to interrupt mode on disconnect */
+        if (s_cbs->max30102_set_polling) {
+            s_cbs->max30102_set_polling(false);
+        }
         ble_svc_start_advertising();
         break;
 

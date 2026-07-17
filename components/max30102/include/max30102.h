@@ -184,6 +184,24 @@ uint32_t max30102_reset_int_count(void);
  */
 i2c_master_bus_handle_t max30102_get_i2c_bus(void);
 
+/* ==================== Read mode ==================== */
+
+/**
+ * @brief Switch between interrupt-driven and polling read modes
+ *
+ * - Interrupt mode (default): uses GPIO ISR + event group to wait for data.
+ * - Polling mode: ppg_task polls FIFO count via I2C at fixed intervals.
+ *
+ * @param enable true = polling, false = interrupt (default)
+ */
+void max30102_set_polling_mode(bool enable);
+
+/**
+ * @brief Check current read mode
+ * @return true if polling mode, false if interrupt mode
+ */
+bool max30102_is_polling_mode(void);
+
 /* ==================== 底层寄存器读写（供调试用） ==================== */
 
 esp_err_t max30102_write_reg(uint8_t reg, uint8_t value);

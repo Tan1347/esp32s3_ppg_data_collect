@@ -37,6 +37,7 @@ static const char *TAG = "max30102";
 /* 驱动状态 */
 static bool s_initialized = false;
 static bool s_measuring = false;
+static volatile bool s_polling_mode = false;
 
 /* I2C 主机句柄 */
 static i2c_master_bus_handle_t s_bus_handle = NULL;
@@ -390,6 +391,36 @@ uint32_t max30102_reset_int_count(void)
     if (!s_event_group) return 0;
     EventBits_t bits = xEventGroupClearBits(s_event_group, EVT_DATA_READY);
     return (bits & EVT_DATA_READY) ? 1 : 0;
+}
+
+/* ========== Read mode switching ========== */
+
+void max30102_set_polling_mode(bool enable)
+{
+    s_polling_mode = enable;
+
+    /* Disable/enable MAX30102 interrupt output (INTR_ENABLE_1).
+     * GPIO ISR stays installed but won't fire when interrupts are disabled. */
+    if (enable) {
+        max30102_write_reg(MAX30102_REG_INTR_ENABLE_1, 0x00);
+        /* Clear any stale event bit */
+        if (s_event_group) {
+            xEventGroupClearBits(s_event_group, EVT_DATA_READY);
+        }
+        puts("[MAX30102] Polling mode ON");
+    } else {
+        max30102_write_reg(MAX30102_REG_INTR_ENABLE_1, 0xC0);
+        /* Clear any stale event bit */
+        if (s_event_group) {
+            xEventGroupClearBits(s_event_group, EVT_DATA_READY);
+        }
+        puts("[MAX30102] Interrupt mode ON");
+    }
+}
+
+bool max30102_is_polling_mode(void)
+{
+    return s_polling_mode;
 }
 
 i2c_master_bus_handle_t max30102_get_i2c_bus(void)

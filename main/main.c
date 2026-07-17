@@ -100,6 +100,11 @@ static void ble_uart_record_stop(void)
     uart_recorder_stop();
 }
 
+static void ble_set_max30102_polling(bool enable)
+{
+    max30102_set_polling_mode(enable);
+}
+
 static const ble_callbacks_t s_ble_cbs = {
     .set_state = system_set_state,
     .get_voltage = battery_get_voltage,
@@ -119,6 +124,7 @@ static const ble_callbacks_t s_ble_cbs = {
     .log_get_buffer_count = ppg_log_get_buffer_count,
     .uart_record_start = ble_uart_record_start,
     .uart_record_stop = ble_uart_record_stop,
+    .max30102_set_polling = ble_set_max30102_polling,
 };
 
 static const http_callbacks_t s_http_cbs = {
@@ -396,6 +402,9 @@ static void button1_task(void *arg)
 
         /* Button pressed, start timing */
         puts("[BUTTON1] Pressed, detecting...");
+
+        /* Switch back to interrupt mode immediately on any button press */
+        max30102_set_polling_mode(false);
         int press_ms = 0;
         bool long_pressed = false;
         while (gpio_get_level(BUTTON1_GPIO) == 0) {
@@ -480,16 +489,21 @@ static void ppg_task(void *arg)
     max30102_raw_t batch_buf[32];
 
     while (s_system_state == STATE_MEASURING || s_system_state == STATE_STANDALONE) {
-        /* Wait for MAX30102 interrupt (FIFO data ready) */
-        esp_err_t ret = max30102_wait_data(1000);
-        if (ret != ESP_OK) {
-            int64_t now = esp_timer_get_time();
-            no_data_sec = (int)((now - last_data_time) / 1000000);
-            if (no_data_sec >= 60) {
-                puts("[PPG] No data for 1min, stop");
-                break;
+        if (max30102_is_polling_mode()) {
+            /* Polling mode: delay then read FIFO */
+            vTaskDelay(pdMS_TO_TICKS(100));
+        } else {
+            /* Interrupt mode: wait for FIFO data ready */
+            esp_err_t ret = max30102_wait_data(1000);
+            if (ret != ESP_OK) {
+                int64_t now = esp_timer_get_time();
+                no_data_sec = (int)((now - last_data_time) / 1000000);
+                if (no_data_sec >= 60) {
+                    puts("[PPG] No data for 1min, stop");
+                    break;
+                }
+                continue;
             }
-            continue;
         }
 
         /* Batch read all available samples */
