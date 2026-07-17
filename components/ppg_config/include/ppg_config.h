@@ -131,7 +131,7 @@ typedef enum {
 #define OTA_ROLLBACK_ENABLE     true
 
 /* ==================== Task Stack Sizes ==================== */
-#define STACK_PPG_TASK          16384
+#define STACK_PPG_TASK          24576
 #define STACK_BLE_CMD           4096
 #define STACK_BLE_NOTIFY         4096  /* Dedicated BLE notification task */
 #define STACK_SYS_LED           2048  /* Reduced: simple LED toggle + WDT feed */
