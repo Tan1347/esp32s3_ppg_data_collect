@@ -278,6 +278,15 @@ esp_err_t wifi_prov_init(void)
 
 esp_err_t wifi_prov_add(const char *ssid, const char *password, uint8_t priority)
 {
+    /* Auto-init if not yet initialized (e.g. called from BLE before WiFi mode) */
+    if (!s_creds_mutex) {
+        esp_err_t ret = wifi_prov_init();
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "wifi_prov_add: auto-init FAILED: %s", esp_err_to_name(ret));
+            return ret;
+        }
+    }
+
     if (!ssid || !s_creds_mutex) {
         ESP_LOGE(TAG, "wifi_prov_add FAILED: ssid=%p mutex=%p", (void*)ssid, (void*)s_creds_mutex);
         return ESP_ERR_INVALID_STATE;
