@@ -8,7 +8,7 @@
 #include <stdint.h>
 
 /* ==================== Firmware Version ==================== */
-#define PPG_FW_VERSION          "1.1.0"
+#define PPG_FW_VERSION          "1.1.1"
 #include "version_ts.h"
 
 /* ==================== System State ==================== */
@@ -131,7 +131,7 @@ typedef enum {
 #define OTA_ROLLBACK_ENABLE     true
 
 /* ==================== Task Stack Sizes ==================== */
-#define STACK_PPG_TASK          12288
+#define STACK_PPG_TASK          16384
 #define STACK_BLE_CMD           4096
 #define STACK_BLE_NOTIFY         4096  /* Dedicated BLE notification task */
 #define STACK_SYS_LED           2048  /* Reduced: simple LED toggle + WDT feed */
