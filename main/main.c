@@ -1034,6 +1034,12 @@ static void main_loop(void)
                 if (bits & EVT_MEASURING_DONE) break;
             }
             stop_collection_tasks();
+            /* If ppg_task stopped due to bad signal, switch to standalone */
+            if (s_bad_signal) {
+                puts("[MAIN] Bad signal detected, switching to standalone");
+                s_bad_signal = false;
+                system_set_state(STATE_STANDALONE);
+            }
             break;
 
         case STATE_BLE_CONNECTED:
