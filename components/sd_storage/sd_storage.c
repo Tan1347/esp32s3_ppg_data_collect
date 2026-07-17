@@ -75,10 +75,10 @@ static void generate_raw_filename(char *buf, size_t len)
 {
     time_t now = time(NULL);
     struct tm *tm_info = localtime(&now);
-    if (tm_info && tm_info->tm_year > 100) {
-        snprintf(buf, len, "%s/raw/%04d%02d%02d_%02d.bin",
+    if (tm_info) {
+        snprintf(buf, len, "%s/raw/%04d%02d%02d_%02d%02d%02d.bin",
                  MOUNT_POINT, tm_info->tm_year + 1900, tm_info->tm_mon + 1,
-                 tm_info->tm_mday, tm_info->tm_hour);
+                 tm_info->tm_mday, tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec);
     } else {
         snprintf(buf, len, "%s/raw/unknown.bin", MOUNT_POINT);
     }
@@ -88,10 +88,10 @@ static void generate_csv_filename(char *buf, size_t len)
 {
     time_t now = time(NULL);
     struct tm *tm_info = localtime(&now);
-    if (tm_info && tm_info->tm_year > 100) {
-        snprintf(buf, len, "%s/csv/%04d%02d%02d.csv",
+    if (tm_info) {
+        snprintf(buf, len, "%s/csv/%04d%02d%02d_%02d%02d%02d.csv",
                  MOUNT_POINT, tm_info->tm_year + 1900, tm_info->tm_mon + 1,
-                 tm_info->tm_mday);
+                 tm_info->tm_mday, tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec);
     } else {
         snprintf(buf, len, "%s/csv/unknown.csv", MOUNT_POINT);
     }
