@@ -299,14 +299,15 @@ esp_err_t max30102_wait_data(uint32_t timeout_ms)
 
 uint8_t max30102_read_fifo_batch(max30102_raw_t *buf, uint8_t max_count)
 {
-    uint8_t count = max30102_get_fifo_count();
-    if (count == 0) return 0;
-    if (count > max_count) count = max_count;
-
-    /* Clear interrupt status */
+    /* Always clear interrupt status first — even if FIFO is empty.
+     * Otherwise INT pin stays LOW permanently, blocking new falling edges. */
     uint8_t dummy;
     max30102_read_reg(MAX30102_REG_INTR_STATUS_1, &dummy);
     max30102_read_reg(MAX30102_REG_INTR_STATUS_2, &dummy);
+
+    uint8_t count = max30102_get_fifo_count();
+    if (count == 0) return 0;
+    if (count > max_count) count = max_count;
 
     /* Batch read: 6 bytes per sample (RED[3] + IR[3]) */
     uint8_t raw_buf[6 * 32];  /* Max 32 samples */
