@@ -10,7 +10,8 @@ dependencies.lock
 sdkconfig
 sdkconfig.old
 
-# Generated version header
+# Generated version headers
+components/ppg_config/include/version.h
 components/ppg_config/include/version_ts.h
 
 # Compile logs
