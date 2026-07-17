@@ -544,8 +544,8 @@ static void ppg_task(void *arg)
             sd_storage_write_csv(&s_algo_result);
             ble_svc_notify_live_data(&s_algo_result);
 
-            /* Check data validity (perfusion ratio) */
-            bool data_valid = s_algo_result.hr_valid || s_algo_result.spo2_valid;
+            /* Check data validity: both HR and SpO2 must be valid */
+            bool data_valid = s_algo_result.hr_valid && s_algo_result.spo2_valid;
             if (!data_valid) {
                 /* Use real wall-clock time instead of hardcoded += 5 */
                 int64_t now = esp_timer_get_time();

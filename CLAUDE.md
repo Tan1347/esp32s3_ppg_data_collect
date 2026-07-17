@@ -29,24 +29,12 @@ picolibc `vfprintf` 内部使用约 8KB 栈空间。在 32KB 主任务栈上：
 
 ```bash
 cd esp32s3
-source ~/esp/esp-idf-v6.0.1/export.sh
-idf.py build
+bash build.sh
+# 或清理后全量编译:
+bash build.sh clean
 ```
 
-## 烧录命令
-
-```bash
-idf.py -p /dev/ttyUSB0 flash
-```
-
-或手动烧录：
-```bash
-esptool --chip esp32s3 --flash_mode dio --flash_size 16MB --flash_freq 80m \
-  write_flash 0x0 build/bootloader/bootloader.bin \
-  0x8000 build/partition_table/partition-table.bin \
-  0x11000 build/ota_data_initial.bin \
-  0x20000 build/app.bin
-```
+**重要**: 运行在 Ubuntu server 上，无法直连物理串口，**禁止尝试烧录固件**。编译成功后固件自动拷贝到 `output/` 目录，用户自行烧录。
 
 ## 串口配置
 
