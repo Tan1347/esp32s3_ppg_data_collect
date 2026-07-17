@@ -890,7 +890,7 @@ static void handle_standalone_state(void)
         ble_svc_stop_advertising();
         puts("BLE advertising stopped");
     }
-    start_collection_tasks();
+    /* MAX30102 stays off — waiting for BUTTON1 or BLE command to start */
 
     /* LED: 1s ON, 9s OFF (10s total cycle) for low power */
     s_led_on_ms = 1000;
