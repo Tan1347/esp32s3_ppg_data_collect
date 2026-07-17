@@ -478,6 +478,7 @@ static void ppg_task(void *arg)
     ppg_algo_init(&s_algo_ctx);
     max30102_start();
     s_ppg_collecting = true;
+    printf("[PPG] Read mode: %s\n", max30102_is_polling_mode() ? "polling" : "interrupt");
 
     int no_data_sec = 0;
     int invalid_sec = 0;  /* Consecutive seconds with invalid result */
