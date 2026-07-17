@@ -509,10 +509,14 @@ static void ppg_task(void *arg)
 
         /* Batch read all available samples */
         uint8_t count = max30102_read_fifo_batch(batch_buf, 32);
-        if (count == 0) continue;
+        if (count == 0) {
+            printf("[PPG] FIFO empty (polling=%d)\n", max30102_is_polling_mode());
+            continue;
+        }
 
         last_data_time = esp_timer_get_time();
         no_data_sec = 0;
+        printf("[PPG] FIFO read %d samples, total=%d\n", count, total_samples);
 
         /* Process each sample */
         for (int i = 0; i < count; i++) {
@@ -534,6 +538,9 @@ static void ppg_task(void *arg)
 
         /* Process algorithm (every ~5s when buffer full) */
         if (ppg_algo_process(&s_algo_ctx, &s_algo_result)) {
+            printf("[PPG] Algo result: HR=%ld SpO2=%ld valid=%d/%d\n",
+                   (long)s_algo_result.heart_rate, (long)s_algo_result.spo2,
+                   s_algo_result.hr_valid, s_algo_result.spo2_valid);
             sd_storage_write_csv(&s_algo_result);
             ble_svc_notify_live_data(&s_algo_result);
 
